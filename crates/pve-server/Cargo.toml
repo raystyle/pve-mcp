@@ -32,6 +32,8 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_
 [dev-dependencies]
 test-support = { path = "../test-support" }
 tempfile = "3"
+serde_json = { workspace = true }
+anyhow = { workspace = true }
 
 [lints]
 workspace = true
