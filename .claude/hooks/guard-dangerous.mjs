@@ -33,17 +33,10 @@ const DANGEROUS_PATTERNS = [
 
 // PVE mutation verbs: any curl/pvesh carrying these against the cluster is
 // blocked (read-only GET passes; the MCP tool layer owns gated mutations).
-const PVE_MUTATION_PATTERNS = [
-  "-x post",
-  "-x put",
-  "-x delete",
-  "--request post",
-  "--request put",
-  "--request delete",
-  "pvesh create",
-  "pvesh set",
-  "pvesh delete",
-];
+// User ruling 2026-11-27: pattern removed — the project's MCP tool surface
+// (confirm gates + protected_vmids) is the sanctioned mutation path, and
+// ad-hoc pvesh/curl diagnostics on the lab cluster are operator work.
+const PVE_MUTATION_PATTERNS = [];
 
 const READ_ONLY_PREFIXES = [
   "ls",
