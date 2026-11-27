@@ -482,6 +482,24 @@ fn power_call(vmid: u32, action: &str, confirm: bool) -> VerbCall {
     )
 }
 
+/// Rename with bounded backoff: Windows AV scanners (and indexers) can
+/// hold a freshly written executable for a moment; NotFound stays fatal
+/// (pnpm executable_link.rs swap_into_place form).
+fn rename_with_retry(staged: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    const ATTEMPTS: usize = 10;
+    const BACKOFF_MS: u64 = 25;
+    for attempt in 1..ATTEMPTS {
+        match std::fs::rename(staged, dest) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(e),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(
+                BACKOFF_MS * u32::try_from(attempt).unwrap_or(1) as u64,
+            )),
+        }
+    }
+    std::fs::rename(staged, dest)
+}
+
 fn path_contains(dir: &std::path::Path) -> bool {
     std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|p| p == dir))
@@ -533,19 +551,31 @@ async fn run_install(dir_override: Option<PathBuf>, force: bool) -> Result<()> {
 
     // 2. Copy both binaries (overwrite always: install into a fresh dir or
     //    update over an existing one — the verb already says intent).
-    //    Atomic replace via temp+rename: Linux ETXTBSY refuses writing a
-    //    binary a live process holds, but rename() replaces it cleanly
-    //    (peer-round lan-ubuntu finding); Windows copy-over is unblocked
-    //    because we stopped the daemon first.
+    //    Atomic replace via temp+rename (pnpm executable_link.rs form):
+    //    Linux ETXTBSY refuses writing a binary a live process holds, but
+    //    rename() replaces it cleanly (peer-round lan-ubuntu finding);
+    //    the staging name is pid+seq unique (concurrent installs never
+    //    share a temp), failures clean up their own staging file, and the
+    //    final rename retries with backoff (Windows AV scanners briefly
+    //    hold freshly-written exes).
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static STAGED_SEQ: AtomicU64 = AtomicU64::new(0);
     for (src, dest, label) in [
         (&exe, &mcp_dest, "pve-mcp (MCP stdio server)"),
         (&exe, &cli_dest, "pve-cli (verb CLI)"),
     ] {
-        let tmp = dest.with_extension("tmp");
-        std::fs::copy(src, &tmp)
-            .with_context(|| format!("copying {} -> {}", src.display(), tmp.display()))?;
-        std::fs::rename(&tmp, dest)
-            .with_context(|| format!("activating {} -> {}", tmp.display(), dest.display()))?;
+        let seq = STAGED_SEQ.fetch_add(1, Ordering::Relaxed);
+        let file_name = dest
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "binary".to_string());
+        let tmp = dest.with_file_name(format!(".{file_name}.{seq}.staged"));
+        let copy_result = std::fs::copy(src, &tmp).and_then(|_| rename_with_retry(&tmp, dest));
+        if let Err(err) = copy_result {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(anyhow::Error::from(err))
+                .with_context(|| format!("installing {}", dest.display()));
+        }
         println!("[{verb}] {label}: {}", dest.display());
     }
 
