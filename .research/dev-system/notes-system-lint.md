@@ -38,7 +38,7 @@
 | hook-shape | .claude/settings.json 引用 | hooks/*.mjs 磁盘存在 |
 | skill-shape | .claude/skills/*/ | SKILL.md + name/description frontmatter |
 | rule-frontmatter | 预期 rule 文件 | paths 域声明 |
-| docs-terminology | docs-style.md 术语表 | 全中文 markdown 语料（门禁/闸门/确认门/虚机/危险操作 → 检查门/护栏/虚拟机/破坏性操作） |
+| docs-terminology | docs-style.md 术语表 | 全中文 markdown 语料（禁用词 → 正词：见 tools/system-lint.mjs TERM_RULES） |
 | **credential-redline** | pve-mcp.toml 真实密码 | 全仓扫描泄漏 + git untracked + example 占位符 |
 | claude-md-current | — | CLAUDE.md 必须提及 just ci 与 pve-mcp.toml |
 
