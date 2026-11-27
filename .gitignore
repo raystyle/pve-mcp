@@ -15,3 +15,6 @@ Cargo.lock.bak
 
 # 本地配置
 .claude/settings.local.json
+
+# 项目级 MCP 注册（指向本机构建产物，各人各配）
+.mcp.json
