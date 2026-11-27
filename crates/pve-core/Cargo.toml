@@ -13,9 +13,15 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 dunce = { workspace = true }
+ureq = { version = "2", features = ["json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
 test-support = { path = "../test-support" }
+serde_json = { workspace = true }
+
+[features]
+smoke = []
 
 [lints]
 workspace = true
