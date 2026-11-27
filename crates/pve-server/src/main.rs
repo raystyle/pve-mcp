@@ -1,4 +1,11 @@
-//! pve-mcp — daemon, MCP server and CLI entry point.
+//! pve-mcp — daemon, MCP server, CLI entry point and `pve-cli` verb host.
+//!
+//! Three consumption forms (know-mcp heritage): MCP stdio (Claude Code),
+//! MCP HTTP (later), and CLI verbs. The verb form runs through a copied
+//! binary named `pve-cli` (see `register`): the exe file stem is the
+//! dispatch key — same native self-registration approach mcp2cli used for
+//! Windows, internalized. Verbs mirror the MCP tools 1:1 and talk to the
+//! daemon admin plane directly, no MCP protocol layer.
 
 mod client_bridge;
 mod daemon;
@@ -6,7 +13,7 @@ mod mcp;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -42,10 +49,121 @@ enum Command {
     Status,
     /// Stop the running daemon.
     Stop,
+    /// Register `pve-cli`: copy this binary under the CLI name. Re-run
+    /// with --force after every pve-mcp upgrade (know-mcp heritage).
+    #[command(name = "register")]
+    Register {
+        /// Directory to place pve-cli in (default: exe-adjacent).
+        #[arg(long)]
+        install_dir: Option<PathBuf>,
+        /// Overwrite an existing pve-cli copy.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+/// Verb CLI invoked via the `pve-cli` binary name: the register command
+/// copies this binary under that name, and the exe stem is the dispatch
+/// key. Verbs mirror the MCP tools 1:1 over the daemon admin plane.
+#[derive(Parser)]
+#[command(name = "pve-cli", about = "pve-mcp CLI verbs (MCP tools 1:1)")]
+struct PveCliArgs {
+    /// Path to pve-mcp.toml.
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
+
+    /// Admin port-file directory.
+    #[arg(long, global = true)]
+    port_dir: Option<PathBuf>,
+
+    /// Machine-readable envelope: {"app":"pve-cli","verb":...,"data":...}.
+    #[arg(long, global = true)]
+    json: bool,
+
+    #[command(subcommand)]
+    command: PveCliVerb,
+}
+
+#[derive(clap::Subcommand)]
+pub enum PveCliVerb {
+    /// Cluster overview (the cluster_status MCP tool).
+    ClusterStatus,
+    /// List guests (the vm_list tool); filters --ty qemu|lxc, --status.
+    VmList {
+        /// Filter qemu | lxc.
+        #[arg(long)]
+        ty: Option<String>,
+        /// Filter running | stopped.
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// One guest's detail (the vm_status tool).
+    VmStatus { vmid: u32 },
+    /// Power action (the vm_power tool); gated actions need --confirm.
+    VmPower {
+        vmid: u32,
+        /// start | shutdown | stop | reboot | reset | suspend | resume.
+        #[arg(long)]
+        action: String,
+        /// Required for shutdown/stop/reboot/reset/suspend.
+        #[arg(long)]
+        confirm: bool,
+        /// Do not wait for the task (print UPID only).
+        #[arg(long)]
+        no_wait: bool,
+    },
+    /// Clone a template into a new VM (the vm_create tool); dry-run until --confirm.
+    VmCreate {
+        /// New VM name.
+        #[arg(long)]
+        name: String,
+        /// Source template vmid.
+        #[arg(long)]
+        template: u32,
+        /// Explicit new vmid (omit = cluster next free).
+        #[arg(long)]
+        new_vmid: Option<u32>,
+        /// Execute (without: dry-run plan).
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Destroy a stopped guest (the vm_delete tool); dry-run until --confirm.
+    VmDelete {
+        vmid: u32,
+        /// Execute (without: dry-run plan).
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Daemon status (the status admin method).
+    DaemonStatus,
+    /// Stop the daemon.
+    DaemonStop,
+    /// Internal: daemon runtime (ensure_daemon spawns `<exe> daemon`).
+    #[command(hide = true)]
+    Daemon,
+}
+
+/// True when this process was launched through the `pve-cli` copy (the exe
+/// file stem is the dispatch key — same routing mcp2cli used for its
+/// copied aliases on Windows).
+fn pve_cli_invoked() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .as_deref()
+        == Some("pve-cli")
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if pve_cli_invoked() {
+        let args: PveCliArgs = PveCliArgs::parse();
+        if let Some(dir) = args.port_dir.clone() {
+            std::env::set_var("PVE_MCP_PORT_DIR", dir);
+        }
+        return run_cli_verb(args.config, args.json, args.command).await;
+    }
+
     let cli = Cli::parse();
     if let Some(dir) = cli.port_dir.clone() {
         std::env::set_var("PVE_MCP_PORT_DIR", dir);
@@ -55,13 +173,18 @@ async fn main() -> Result<()> {
         Command::Status => run_status(cli.config).await,
         Command::Stop => run_stop().await,
         Command::Mcp => mcp::serve_stdio(cli.config).await,
-        Command::Http => anyhow::bail!("MCP HTTP surface lands with the tool table"),
+        Command::Http => bail!("MCP HTTP surface lands with the tool table"),
+        Command::Register { install_dir, force } => run_register(install_dir, force),
     }
 }
 
+// ---------------------------------------------------------------------------
+// pve-cli verb runner
+// ---------------------------------------------------------------------------
+
 async fn run_status(config: Option<PathBuf>) -> Result<()> {
     daemon::ensure_daemon(config.as_deref())?;
-    let response = daemon::admin_request("status", serde_json::json!({}))?;
+    let response = client_bridge::admin_request("status", serde_json::json!({}))?;
     println!("{}", serde_json::to_string_pretty(&response["result"])?);
     Ok(())
 }
@@ -71,7 +194,7 @@ async fn run_stop() -> Result<()> {
         println!("daemon not running");
         return Ok(());
     }
-    let _ = daemon::admin_request("stop", serde_json::json!({}));
+    let _ = client_bridge::admin_request("stop", serde_json::json!({}));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     while std::time::Instant::now() < deadline {
         if !daemon::is_daemon_listening() {
@@ -81,4 +204,230 @@ async fn run_stop() -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     anyhow::bail!("daemon did not stop within 15s");
+}
+
+async fn run_cli_verb(config: Option<PathBuf>, json: bool, verb: PveCliVerb) -> Result<()> {
+    use serde_json::json;
+    type Renderer = Box<dyn FnOnce(&serde_json::Value) -> String>;
+    let (method, params, render): (&str, serde_json::Value, Renderer) = match verb {
+        PveCliVerb::ClusterStatus => (
+            "cluster_status",
+            json!({}),
+            Box::new(|r| {
+                format!(
+                    "PVE {} | nodes {} | guests {} (running {}, qemu {}, lxc {})",
+                    r["pve_version"].as_str().unwrap_or("?"),
+                    r["nodes"].as_array().map(|a| a.len()).unwrap_or(0),
+                    r["guests"]["total"].as_u64().unwrap_or(0),
+                    r["guests"]["running"].as_u64().unwrap_or(0),
+                    r["guests"]["qemu"].as_u64().unwrap_or(0),
+                    r["guests"]["lxc"].as_u64().unwrap_or(0),
+                )
+            }),
+        ),
+        PveCliVerb::VmList { ty, status } => {
+            let mut params = json!({});
+            if let Some(ty) = ty {
+                params["ty"] = json!(ty);
+            }
+            if let Some(status) = status {
+                params["status"] = json!(status);
+            }
+            (
+                "vm_list",
+                params,
+                Box::new(|r| {
+                    let guests = r["guests"].as_array().cloned().unwrap_or_default();
+                    let mut out = format!("{} guests:\n", r["count"].as_u64().unwrap_or(0));
+                    for g in guests {
+                        out.push_str(&format!(
+                            "  {:>4}  {:<22} {:<8} {:<9} {:<8} {}\n",
+                            g["vmid"].as_u64().unwrap_or(0),
+                            g["name"].as_str().unwrap_or("?"),
+                            g["ty"].as_str().unwrap_or("?"),
+                            g["status"].as_str().unwrap_or("?"),
+                            g["node"].as_str().unwrap_or("?"),
+                            if g["template"].as_bool().unwrap_or(false) {
+                                "[tpl]"
+                            } else {
+                                ""
+                            },
+                        ));
+                    }
+                    out
+                }),
+            )
+        }
+        PveCliVerb::VmStatus { vmid } => (
+            "vm_status",
+            json!({"vmid": vmid}),
+            Box::new(|r| {
+                format!(
+                    "{} {} ({}): {} | cores {} | mem {}MB",
+                    r["vmid"].as_u64().unwrap_or(0),
+                    r["config"]["name"].as_str().unwrap_or("?"),
+                    r["ty"].as_str().unwrap_or("?"),
+                    r["current"]["status"].as_str().unwrap_or("?"),
+                    r["config"]["cores"].as_u64().unwrap_or(0),
+                    r["config"]["memory"]
+                        .as_str()
+                        .and_then(|m| m.parse::<u64>().ok())
+                        .unwrap_or(r["config"]["memory"].as_u64().unwrap_or(0)),
+                )
+            }),
+        ),
+        PveCliVerb::VmPower {
+            vmid,
+            action,
+            confirm,
+            no_wait,
+        } => (
+            "vm_power",
+            json!({"vmid": vmid, "action": action, "confirm": confirm, "wait": !no_wait}),
+            Box::new(|r| {
+                if r["skipped"].as_bool().unwrap_or(false) {
+                    format!("skipped: {}", r["reason"].as_str().unwrap_or("?"))
+                } else {
+                    format!(
+                        "{}: ok={} exit={}",
+                        r["action"].as_str().unwrap_or("?"),
+                        r["ok"].as_bool().unwrap_or(false),
+                        r["exitstatus"].as_str().unwrap_or("?"),
+                    )
+                }
+            }),
+        ),
+        PveCliVerb::VmCreate {
+            name,
+            template,
+            new_vmid,
+            confirm,
+        } => {
+            let mut params = json!({"name": name, "template": template, "confirm": confirm});
+            if let Some(v) = new_vmid {
+                params["new_vmid"] = json!(v);
+            }
+            (
+                "vm_create",
+                params,
+                Box::new(|r| {
+                    if r["dry_run"].as_bool().unwrap_or(false) {
+                        let plan = &r["plan"];
+                        format!(
+                            "dry-run: clone {} -> vmid {} named {} (pass --confirm to execute)",
+                            plan["source"].as_u64().unwrap_or(0),
+                            plan["new_vmid"].as_u64().unwrap_or(0),
+                            plan["name"].as_str().unwrap_or("?"),
+                        )
+                    } else {
+                        format!(
+                            "created vmid {}: ok={} exit={}",
+                            r["new_vmid"].as_u64().unwrap_or(0),
+                            r["ok"].as_bool().unwrap_or(false),
+                            r["exitstatus"].as_str().unwrap_or("?"),
+                        )
+                    }
+                }),
+            )
+        }
+        PveCliVerb::VmDelete { vmid, confirm } => (
+            "vm_delete",
+            json!({"vmid": vmid, "confirm": confirm}),
+            Box::new(|r| {
+                if r["dry_run"].as_bool().unwrap_or(false) {
+                    let plan = &r["plan"];
+                    format!(
+                        "dry-run: destroy vmid {} ({} on {}, {}) — pass --confirm to execute",
+                        plan["vmid"].as_u64().unwrap_or(0),
+                        plan["ty"].as_str().unwrap_or("?"),
+                        plan["node"].as_str().unwrap_or("?"),
+                        plan["status"].as_str().unwrap_or("?"),
+                    )
+                } else {
+                    format!(
+                        "destroyed: ok={} exit={}",
+                        r["ok"].as_bool().unwrap_or(false),
+                        r["exitstatus"].as_str().unwrap_or("?"),
+                    )
+                }
+            }),
+        ),
+        PveCliVerb::DaemonStatus => return run_status(config).await,
+        PveCliVerb::DaemonStop => return run_stop().await,
+        PveCliVerb::Daemon => return daemon::run_daemon(config, None),
+    };
+
+    daemon::ensure_daemon(config.as_deref())?;
+    let response = client_bridge::admin_request(method, params)?;
+    if let Some(err) = response.get("error").and_then(|e| e.as_str()) {
+        bail!("{err}");
+    }
+    let result = response["result"].clone();
+    if json {
+        let envelope = json!({
+            "app": "pve-cli",
+            "verb": method,
+            "data": result,
+        });
+        println!("{}", serde_json::to_string(&envelope)?);
+    } else {
+        print!("{}", render(&result));
+        if !result.to_string().ends_with('\n') {
+            println!();
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// register (native self-copy, mcp2cli approach internalized)
+// ---------------------------------------------------------------------------
+
+fn run_register(install_dir: Option<PathBuf>, force: bool) -> Result<()> {
+    let exe = std::env::current_exe().context("resolving current exe")?;
+    let exe_dir = exe.parent().context("exe has no parent")?.to_path_buf();
+    let dir = install_dir.unwrap_or_else(|| exe_dir.clone());
+    std::fs::create_dir_all(&dir).context("creating install dir")?;
+    let cli_name = if cfg!(windows) {
+        "pve-cli.exe"
+    } else {
+        "pve-cli"
+    };
+    let dest = dir.join(cli_name);
+    if dir != exe_dir && dest.exists() && !force {
+        bail!(
+            "{} already exists — pass --force to overwrite (or re-register after upgrading pve-mcp)",
+            dest.display()
+        );
+    }
+    std::fs::copy(&exe, &dest)
+        .with_context(|| format!("copying {} -> {}", exe.display(), dest.display()))?;
+    println!("registered: {}", dest.display());
+    if !path_contains(&dir) {
+        println!(
+            "note: {} is not on PATH — add it to use `pve-cli` from anywhere",
+            dir.display()
+        );
+    }
+    let status = std::process::Command::new(&dest)
+        .arg("--help")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    match status {
+        Ok(s) if s.success() => println!("self-check ok: pve-cli --help"),
+        other => {
+            let _ = std::fs::remove_file(&dest);
+            bail!("pve-cli copy failed self-check: {other:?} — removed");
+        }
+    }
+    println!("try: pve-cli cluster-status");
+    println!("     pve-cli vm-list --ty lxc");
+    Ok(())
+}
+
+fn path_contains(dir: &std::path::Path) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|p| p == dir))
+        .unwrap_or(false)
 }

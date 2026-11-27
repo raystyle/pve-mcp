@@ -207,11 +207,16 @@ pub fn ensure_daemon(config_path: Option<&Path>) -> Result<()> {
 fn spawn_daemon_detached(config_path: Option<&Path>) -> Result<()> {
     let exe = std::env::current_exe().context("resolving current exe")?;
     let mut args = String::from("daemon");
+    // The WMI child resolves relative paths against System32, and its cwd
+    // cannot see the caller's pve-mcp.toml — resolve the default config
+    // HERE (caller's cwd / exe dir) and echo it absolutely. Without this
+    // the daemon builds an empty config, fails PveClient::new and dies
+    // while the caller polls for 30s.
+    let config_path = config_path
+        .map(PathBuf::from)
+        .or_else(pve_core::config::default_config_path);
     if let Some(path) = config_path {
-        // WMI hosts the new process with cwd=System32: relative config
-        // paths resolve there and the daemon dies before binding. The
-        // path must be absolute before it is echoed.
-        let absolute = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let absolute = dunce::canonicalize(&path).unwrap_or(path);
         args.push_str(&format!(" --config \"{}\"", absolute.display()));
     }
     // CRITICAL: detached spawns on Windows do not inherit the caller's
@@ -308,22 +313,6 @@ fn wait_for_ready() -> Result<()> {
         std::thread::sleep(POLL_INTERVAL);
     }
     bail!("daemon did not become ready within {READY_TIMEOUT:?}");
-}
-
-pub fn admin_request(method: &str, params: Value) -> Result<Value> {
-    let mut stream = connect_admin(Duration::from_secs(30))?;
-    let request = json!({"id": 1, "method": method, "params": params});
-    use std::io::{BufRead, BufReader, Write};
-    writeln!(stream, "{request}")?;
-    stream.flush()?;
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    if line.is_empty() {
-        bail!("daemon closed the connection without a reply");
-    }
-    let response: Value = serde_json::from_str(line.trim())?;
-    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
