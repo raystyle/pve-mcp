@@ -21,6 +21,7 @@
 | [feature-scan](feature-scan/) | 集群清点、PVE MCP 先例工具矩阵、工具表 | ADR-001 |
 | [pve-core](pve-core/) | 域类型 + 配置 + API 客户端首增量验证 | ADR-001 |
 | [peer-round](peer-round/) | 三平台联动验证（lan-mac/lan-ubuntu 常驻 peer） | ADR-002 |
+| [final-verification](final-verification/) | 17/17 工具终验 + 三平台全绿（9f4432c） | ADR-001 |
 
 ## 与 plan / ADR 的分工对齐
 

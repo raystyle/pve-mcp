@@ -10,7 +10,7 @@ metadata:
 
 # 工作状态（2026-11-27 更新）
 
-- 阶段：ADR-001 工具表 17/17 完成（migrate 单节点不收）；三平台轮进行中
+- 阶段：目标达成——17/17 工具交付+真实集群验收；三平台 49×3 终验全绿（9f4432c）；ADR-001 判定满足
 - 代码：45 测试 × 3 平台全绿；远程已推（a8fd936→7130ee4 链）
 - MCP 接入形态（用户裁定）：项目级 `.mcp.json`（untracked），名字 `pve-mcp`，非 user-scope
 - 五连测实录：cluster_status / vm_list lxc / vm_status 102 / 140 关机被护 / create dry-run 126
