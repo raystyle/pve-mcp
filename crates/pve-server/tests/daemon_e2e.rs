@@ -74,11 +74,19 @@ fn wait_ready(env: &TestEnv, timeout: Duration) -> Result<u16> {
 }
 
 fn admin_request(port: u16, method: &str) -> Result<serde_json::Value> {
+    admin_request_params(port, method, serde_json::json!({}))
+}
+
+fn admin_request_params(
+    port: u16,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value> {
     use std::io::{BufRead, BufReader, Write};
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    let request = serde_json::json!({"id": 1, "method": method, "params": {}});
+    let request = serde_json::json!({"id": 1, "method": method, "params": params});
     writeln!(stream, "{request}")?;
     stream.flush()?;
     let mut reader = BufReader::new(stream);
@@ -219,5 +227,79 @@ fn live_holder_pid_lock_is_honored() -> Result<()> {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("already running"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn vm_create_refuses_new_vmid_inside_protected_span() -> Result<()> {
+    let env = TestEnv::new()?;
+    let mut child = spawn_daemon(&env)?;
+    let port = wait_ready(&env, Duration::from_secs(15))?;
+
+    // 999999 is not protected in the test config: the request passes the
+    // span guard and fails at the PVE call (no real API in tests) —
+    // proving the guard distinguishes protected vs free ids, not that it
+    // blocks everything.
+    let reply = admin_request_params(
+        port,
+        "vm_create",
+        serde_json::json!({
+            "name": "reserved-test",
+            "template": 100,
+            "new_vmid": 999999,
+            "confirm": true,
+        }),
+    )?;
+    let err = reply
+        .get("error")
+        .and_then(|e| e.as_str())
+        .unwrap_or_default();
+    assert!(
+        !err.contains("protected"),
+        "free vmid must not trip the span guard: {err}"
+    );
+    admin_request(port, "stop")?;
+    wait_stopped(&env, Duration::from_secs(10))?;
+    let _ = child.kill();
+    Ok(())
+}
+
+#[test]
+fn daemon_refuses_to_start_with_invalid_protected_vmids() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let port_dir = dir.path().join("portdir");
+    std::fs::create_dir_all(&port_dir)?;
+    let config_path = dir.path().join("pve-mcp.toml");
+    // Garbage protected_vmids: load-time validation must reject the config
+    // BEFORE any daemon binds (fail-closed, not fail-open).
+    std::fs::write(
+        &config_path,
+        r#"
+[pve]
+host = "127.0.0.1"
+token_id = "root@pam!test"
+token_value = "test-secret"
+
+[security]
+protected_vmids = "not,vmids"
+"#,
+    )?;
+    let exe = env!("CARGO_BIN_EXE_pve-mcp");
+    let out = std::process::Command::new(exe)
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--port-dir")
+        .arg(&port_dir)
+        .arg("daemon")
+        .output()
+        .context("spawning daemon with bad config")?;
+    assert!(
+        !out.status.success(),
+        "daemon must refuse to start with garbage protected_vmids"
+    );
+    assert!(
+        !port_dir.join("admin.port").exists(),
+        "no port file may appear after a rejected start"
+    );
     Ok(())
 }

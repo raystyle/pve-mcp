@@ -128,15 +128,12 @@ impl PveConfig {
 pub struct ServerConfig {
     /// HTTP MCP transport bind address.
     pub http_bind: String,
-    /// Admin plane port-file directory (KNOW_PORT_DIR analogue).
-    pub port_dir: Option<PathBuf>,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             http_bind: "127.0.0.1:8766".to_string(),
-            port_dir: None,
         }
     }
 }

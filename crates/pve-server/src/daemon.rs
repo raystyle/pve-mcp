@@ -132,10 +132,14 @@ impl Daemon<Ready> {
     /// Never returns while healthy. The PVE client lives behind a mutex in
     /// the admin state — the ticket session is mutable, so calls serialize.
     pub fn serve(self, listener: TcpListener, client: PveClient) -> Result<()> {
+        let protected_vmids = self
+            .config
+            .protected_vmids_set()
+            .context("parsing security.protected_vmids")?;
         let state = Arc::new(AdminState {
             config: self.config,
             client: std::sync::Mutex::new(client),
-            protected_vmids: std::sync::OnceLock::new(),
+            protected_vmids,
         });
         for stream in listener.incoming() {
             match stream {
@@ -160,8 +164,10 @@ impl Daemon<Ready> {
 struct AdminState {
     config: Config,
     client: std::sync::Mutex<PveClient>,
-    /// Lazy-parsed protected vmid set (config string → VmidSet).
-    protected_vmids: std::sync::OnceLock<pve_core::VmidSet>,
+    /// Protected vmid set, parsed once at daemon start. Config::validate
+    /// already proved the string parses at load time — no lazy fallback
+    /// branch (review 0003 report #1: unwrap_or_default was a fail-open).
+    protected_vmids: pve_core::VmidSet,
 }
 
 // ---------------------------------------------------------------------------
@@ -588,6 +594,15 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
                             .and_then(|v| pve_core::domain::Vmid::try_from(v).ok())
                             .ok_or_else(|| "cluster returned no usable next id".to_string())?,
                     };
+                // Reserved ranges: protected_vmids also blocks creation
+                // inside its span (a VM built there would be unmanageable
+                // afterwards — review 0003 report #4).
+                if state.protected_vmids.contains(new_vmid) {
+                    return Err(format!(
+                        "new_vmid {} is inside the protected span (security.protected_vmids) — pick another id",
+                        new_vmid.get()
+                    ));
+                }
                 if !confirm {
                     return Ok(json!({
                         "dry_run": true,
@@ -861,10 +876,7 @@ fn guest_guard(
         .ok_or_else(|| "vmid required".to_string())?;
     let vmid =
         pve_core::Vmid::try_from(vmid_raw).map_err(|_| "vmid must be 100..=999999".to_string())?;
-    let set = state
-        .protected_vmids
-        .get_or_init(|| state.config.protected_vmids_set().unwrap_or_default());
-    if set.contains(vmid) {
+    if state.protected_vmids.contains(vmid) {
         return Err(format!(
             "vmid {} is protected (security.protected_vmids) — no tool may change it",
             vmid.get()

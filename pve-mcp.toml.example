@@ -1,12 +1,12 @@
 # pve-mcp 配置示例。复制为 pve-mcp.toml 后填写（pve-mcp.toml 已 gitignore，凭据绝不进 git）。
-# 查找顺序：--config > PVE_MCP_CONFIG 环境变量 > exe 同目录 > 工作目录。
+# 查找顺序：--config > PVE_MCP_CONFIG 环境变量 > 应用数据目录（%APPDATA%/pve-mcp）> exe 同目录 > 工作目录。
 
 [pve]
 # PVE Web/API 地址（自签证书时 verify_ssl = false）
 host = "192.168.88.88"
 port = 8006
 verify_ssl = false
-# 受信 CA bundle 路径；设置后按其校验（自签集群可拷贝 pve-root-ca.pem）
+# 受信 CA bundle（预留字段，当前未实装——设了不生效；自签集群用 verify_ssl = false）
 # ca_bundle = ""
 hostname = "lan-pve"
 
@@ -24,8 +24,6 @@ password = ""
 [server]
 # MCP HTTP 传输绑定地址
 http_bind = "127.0.0.1:8766"
-# 管理面端口文件目录（缺省 %APPDATA%/pve-mcp 或 PVE_MCP_PORT_DIR）
-# port_dir = ""
 
 [security]
 # 权限档位：full = 全工具面；read_only = 仅查询工具

@@ -44,4 +44,8 @@
 | --- | --- | --- |
 | **Blocking #1** dot-segment 注入 | SnapshotName 加 `.`/`..`/`./x`/`../x` 拒绝 + `?`/`#`/`%` 拒绝；NodeName/StorageName 同步收紧；新增注入拒绝测试（先红后绿证明）；**真实集群验收**：`delete name=".."` confirm=true 现被边界拒绝（VM 104 完好） | 待提交 |
 | Report #3 snapshot list 被 read_only 误拒 | list 改走纯 vmid 解析（不过 guest_guard 写护栏），create/rollback/delete 仍过 guest_guard | 同上 |
-| Report #1/#2/#4-#16 | 待后续增量（fail-open 启动期化 / wait=false 逃生 / new_vmid 保护 / ca_bundle 实装 / chrono 删除 / set_var 提前 / lint SKIP 显式化等） | — |
+| Report #1 fail-open | protected_vmids 改启动期急解析存 AdminState（validate 已保证可解析，消除 unwrap_or_default 兜底）；新增 fail-closed 回归测试（坏配置拒绝启动 + 无端口文件） | 待提交 |
+| Report #4 new_vmid 保留段 | vm_create 对 new_vmid 过 protected_vmids span（建在保留段的机将不可管理） | 同上 |
+| Report #5 死旋钮 | server.port_dir 从 config + example 移除（无代码读取）；ca_bundle 注释改为明确"预留未实装" | 同上 |
+| Report #10 chrono | 两 crate 声明删除（零使用） | 同上 |
+| Report #2/#6-#9/#11-#16 | 待后续增量（wait=false 逃生 / 吞行错误 / UPID 后置校验 / snapshot CLI 动词 / set_var 提前 / lint SKIP 显式化 / admin JSON 错误回复 / GuestSummary 品牌 / README 风险声明） | — |
