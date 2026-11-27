@@ -278,8 +278,8 @@ fn spawn_daemon_detached(config_path: Option<&Path>) -> Result<()> {
     #[cfg(unix)]
     {
         let mut command = std::process::Command::new(&exe);
-        command.arg("daemon");
-        if let Some(path) = config_path {
+        command.arg("daemon-run");
+        if let Some(path) = &config_path {
             command.arg("--config").arg(path);
         }
         command
