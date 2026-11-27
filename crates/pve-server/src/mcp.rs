@@ -67,6 +67,23 @@ pub struct VmDeleteArgs {
     pub confirm: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SnapshotManageArgs {
+    /// Guest id.
+    pub vmid: i64,
+    /// list | create | rollback | delete.
+    pub action: String,
+    /// Snapshot name (create/rollback/delete; not needed for list).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Optional description (create only).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Required for rollback and delete (create is dry-run without it).
+    #[serde(default)]
+    pub confirm: Option<bool>,
+}
+
 #[derive(Clone)]
 pub struct PveMcpServer {
     config_path: Option<std::path::PathBuf>,
@@ -190,6 +207,33 @@ impl PveMcpServer {
             "confirm": args.confirm.unwrap_or(false),
         });
         forward(self.config_path.clone(), "vm_delete", params).await
+    }
+
+    /// Snapshot operations for one guest (list/create/rollback/delete).
+    #[tool(
+        description = "Manage guest snapshots. Actions: list (name/time/vmstate/parent), create (name + optional description; dry-run until confirm=true), rollback (restores the guest to the snapshot; destructive — needs confirm=true; PVE stops a running guest when vmstate was captured), delete (destructive — needs confirm=true). Names must not contain whitespace, '/', ',' or '='; 'current' is rejected.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn snapshot_manage(
+        &self,
+        Parameters(args): Parameters<SnapshotManageArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut params = serde_json::json!({
+            "vmid": args.vmid,
+            "action": args.action,
+            "confirm": args.confirm.unwrap_or(false),
+        });
+        if let Some(name) = &args.name {
+            params["name"] = serde_json::json!(name);
+        }
+        if let Some(desc) = &args.description {
+            params["description"] = serde_json::json!(desc);
+        }
+        forward(self.config_path.clone(), "snapshot_manage", params).await
     }
 }
 

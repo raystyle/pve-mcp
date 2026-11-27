@@ -386,7 +386,7 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
         "status" => Ok(json!({
             "version": env!("CARGO_PKG_VERSION"),
             "pid": std::process::id(),
-            "tools": 3,
+            "tools": 8,
         })),
         "ping" => Ok(json!({"pong": true})),
         // Read-tool dispatch: lock the shared client, run the typed query,
@@ -678,6 +678,128 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
                         }))
                     }
                     None => Ok(json!({"vmid": vmid.get(), "upid": null})),
+                }
+            })
+        }
+        "snapshot_manage" => {
+            let vmid = guest_guard(state, &params)?;
+            let action = params
+                .get("action")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "action required (list|create|rollback|delete)".to_string())?
+                .to_string();
+            let confirm = params
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let snap_raw = params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let description = params
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            run_tool(state, move |client| {
+                let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+                match action.as_str() {
+                    "list" => {
+                        let snaps = client.snapshot_list(&guest).map_err(|e| e.to_string())?;
+                        let rows: Vec<Value> = snaps
+                            .iter()
+                            .map(|s| {
+                                json!({
+                                    "name": s.name,
+                                    "description": s.description,
+                                    "snaptime": s.snaptime,
+                                    "has_vmstate": s.vmstate.is_some(),
+                                    "parent": s.parent,
+                                })
+                            })
+                            .collect();
+                        Ok(json!({"vmid": vmid.get(), "snapshots": rows, "count": rows.len()}))
+                    }
+                    "create" => {
+                        let name = snap_raw
+                            .clone()
+                            .ok_or_else(|| "name required for create".to_string())?;
+                        let name = pve_core::domain::SnapshotName::try_from(name)
+                            .map_err(|e| e.to_string())?;
+                        if !confirm {
+                            return Ok(json!({
+                                "dry_run": true,
+                                "plan": {
+                                    "vmid": vmid.get(),
+                                    "action": "create",
+                                    "name": name.as_str(),
+                                    "note": "pass confirm=true to execute",
+                                },
+                            }));
+                        }
+                        let upid = client
+                            .snapshot_create(&guest, &name, description.as_deref())
+                            .map_err(|e| e.to_string())?
+                            .filter(|s| !s.is_empty());
+                        Ok(json!({
+                            "vmid": vmid.get(),
+                            "action": "create",
+                            "name": name.as_str(),
+                            "upid": upid,
+                        }))
+                    }
+                    "rollback" | "delete" => {
+                        // Both mutate guest state destructively: gated.
+                        let name = snap_raw
+                            .clone()
+                            .ok_or_else(|| "name required".to_string())?;
+                        let name = pve_core::domain::SnapshotName::try_from(name)
+                            .map_err(|e| e.to_string())?;
+                        if !confirm {
+                            return Ok(json!({
+                                "dry_run": true,
+                                "plan": {
+                                    "vmid": vmid.get(),
+                                    "action": action,
+                                    "name": name.as_str(),
+                                    "note": "pass confirm=true to execute",
+                                },
+                            }));
+                        }
+                        let upid = if action == "rollback" {
+                            client.snapshot_rollback(&guest, &name)
+                        } else {
+                            client.snapshot_delete(&guest, &name)
+                        }
+                        .map_err(|e| e.to_string())?
+                        .filter(|s| !s.is_empty());
+                        match upid {
+                            Some(raw) => {
+                                let upid = pve_core::domain::Upid::try_from(raw.clone())
+                                    .map_err(|e| e.to_string())?;
+                                let timeout =
+                                    Duration::from_secs(state.config.security.wait_timeout_secs);
+                                let (ok, exit, log) = client
+                                    .wait_task(&guest.node, &upid, timeout)
+                                    .map_err(|e| e.to_string())?;
+                                Ok(json!({
+                                    "vmid": vmid.get(),
+                                    "action": action,
+                                    "name": name.as_str(),
+                                    "upid": raw,
+                                    "ok": ok,
+                                    "exitstatus": exit,
+                                    "log_tail": log,
+                                }))
+                            }
+                            None => Ok(json!({
+                                "vmid": vmid.get(),
+                                "action": action,
+                                "name": name.as_str(),
+                                "upid": null,
+                            })),
+                        }
+                    }
+                    other => Err(format!("unknown action {other:?}")),
                 }
             })
         }

@@ -3,7 +3,7 @@
 use serde::Deserialize;
 
 use crate::client::{ApiError, Method, PveClient};
-use crate::domain::{GuestRef, GuestType, NodeName, Vmid};
+use crate::domain::{GuestRef, GuestType, NodeName, SnapshotName, Vmid};
 
 /// One guest row from /cluster/resources?type=vm (qemu + lxc together —
 /// the caller filters by `ty`).
@@ -64,6 +64,20 @@ pub struct NodeSummary {
     pub maxmem: Option<u64>,
     #[serde(default)]
     pub uptime: Option<u64>,
+}
+
+/// One snapshot row (post `current` filtering).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SnapshotEntry {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub snaptime: Option<i64>,
+    #[serde(default)]
+    pub vmstate: Option<String>,
+    #[serde(default)]
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,6 +274,55 @@ impl PveClient {
                 ("destroy-unreferenced-disks".to_string(), "1".to_string()),
             ],
         )
+    }
+
+    /// Snapshot list for one guest. The `current` pseudo-entry is
+    /// filtered here — it is not a snapshot.
+    pub fn snapshot_list(&mut self, guest: &GuestRef) -> Result<Vec<SnapshotEntry>, ApiError> {
+        let path = format!("/{}/snapshot", guest.api_path());
+        let rows: Vec<serde_json::Value> = self.get_json(&path)?.unwrap_or_default();
+        Ok(rows
+            .into_iter()
+            .filter(|r| r.get("name").and_then(|n| n.as_str()) != Some("current"))
+            .filter_map(|r| serde_json::from_value(r).ok())
+            .collect())
+    }
+
+    /// Create a snapshot. Returns the task UPID (long task for large disks).
+    pub fn snapshot_create(
+        &mut self,
+        guest: &GuestRef,
+        name: &SnapshotName,
+        description: Option<&str>,
+    ) -> Result<Option<String>, ApiError> {
+        let path = format!("/{}/snapshot", guest.api_path());
+        let mut fields = vec![("snapname".to_string(), name.as_str().to_string())];
+        if let Some(desc) = description {
+            fields.push(("description".to_string(), desc.to_string()));
+        }
+        self.post_form(&path, &fields)
+    }
+
+    /// Roll back to a snapshot. Returns the task UPID. PVE stops a running
+    /// guest first when the snapshot carries vmstate; without vmstate the
+    /// rollback requires the guest stopped (daemon surfaces the API error).
+    pub fn snapshot_rollback(
+        &mut self,
+        guest: &GuestRef,
+        name: &SnapshotName,
+    ) -> Result<Option<String>, ApiError> {
+        let path = format!("/{}/snapshot/{}/rollback", guest.api_path(), name.as_str());
+        self.post_form(&path, &[])
+    }
+
+    /// Delete a snapshot. Returns the task UPID.
+    pub fn snapshot_delete(
+        &mut self,
+        guest: &GuestRef,
+        name: &SnapshotName,
+    ) -> Result<Option<String>, ApiError> {
+        let path = format!("/{}/snapshot/{}", guest.api_path(), name.as_str());
+        self.delete(&path, &[])
     }
 
     /// Method enum re-export for callers building raw requests.
