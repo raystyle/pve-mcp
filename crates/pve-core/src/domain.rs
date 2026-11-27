@@ -144,8 +144,13 @@ impl TryFrom<String> for NodeName {
         if s.is_empty() {
             return Err(DomainError::NodeName(s, "must not be empty"));
         }
+        // Same dot-segment hazard as SnapshotName: the name lands in URL
+        // path segments; a ".." node would redirect API calls elsewhere.
+        if s == "." || s == ".." {
+            return Err(DomainError::NodeName(s, "must not be a dot-segment"));
+        }
         if s.chars()
-            .any(|c| c.is_whitespace() || c == '/' || c == '?' || c == '#')
+            .any(|c| c.is_whitespace() || matches!(c, '/' | '?' | '#' | '%'))
         {
             return Err(DomainError::NodeName(
                 s,
@@ -187,8 +192,11 @@ impl TryFrom<String> for StorageName {
         if s.is_empty() {
             return Err(DomainError::StorageName(s, "must not be empty"));
         }
+        if s == "." || s == ".." {
+            return Err(DomainError::StorageName(s, "must not be a dot-segment"));
+        }
         if s.chars()
-            .any(|c| c.is_whitespace() || c == '/' || c == '?' || c == '#')
+            .any(|c| c.is_whitespace() || matches!(c, '/' | '?' | '#' | '%'))
         {
             return Err(DomainError::StorageName(
                 s,
@@ -226,12 +234,19 @@ impl TryFrom<String> for SnapshotName {
                 "must be non-empty and not 'current'",
             ));
         }
+        // Dot-segments: the name flows raw into a URL path segment
+        // ("/snapshot/<name>"), and WHATWG normalization turns ".." into
+        // a parent hop — a crafted name would DELETE the guest itself.
+        // '?'/'#' inject query/fragment; '%' breaks percent-decoding.
+        if s == "." || s == ".." || s.starts_with("./") || s.starts_with("../") {
+            return Err(DomainError::SnapshotName(s, "must not be a dot-segment"));
+        }
         if s.chars()
-            .any(|c| c.is_whitespace() || c == '/' || c == ',' || c == '=')
+            .any(|c| c.is_whitespace() || matches!(c, '/' | ',' | '=' | '?' | '#' | '%'))
         {
             return Err(DomainError::SnapshotName(
                 s,
-                "must not contain whitespace, '/', ',' or '='",
+                "must not contain whitespace, '/', ',', '=', '?', '#' or '%'",
             ));
         }
         Ok(Self(s))
@@ -413,6 +428,33 @@ mod tests {
     fn storage_name_rejects_hostile() {
         assert!(StorageName::try_from("local-lvm".to_string()).is_ok());
         assert!(StorageName::try_from(String::new()).is_err());
+    }
+
+    #[test]
+    fn snapshot_name_rejects_dot_segment_and_url_injection() {
+        // Review 0003 blocking: ".." flows into "/snapshot/<name>" and
+        // WHATWG normalization turns it into a parent hop — DELETE would
+        // destroy the guest itself. The exact attack vector, held green.
+        for name in [
+            "..",
+            ".",
+            "../x",
+            "x/../y",
+            "snap?query",
+            "snap#frag",
+            "100%2e%2e",
+        ] {
+            assert!(
+                SnapshotName::try_from(name.to_string()).is_err(),
+                "injection name {name:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn node_and_storage_names_reject_dot_segments() {
+        assert!(NodeName::try_from("..").is_err());
+        assert!(StorageName::try_from("..".to_string()).is_err());
     }
 
     #[test]

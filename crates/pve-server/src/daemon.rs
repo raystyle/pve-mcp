@@ -682,12 +682,23 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
             })
         }
         "snapshot_manage" => {
-            let vmid = guest_guard(state, &params)?;
             let action = params
                 .get("action")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "action required (list|create|rollback|delete)".to_string())?
                 .to_string();
+            // list is a pure read — the write gate (tier + protected) does
+            // not apply to it (review 0003 report #3).
+            let vmid = if action == "list" {
+                let raw = params
+                    .get("vmid")
+                    .and_then(|v| v.as_i64())
+                    .ok_or_else(|| "vmid required".to_string())?;
+                pve_core::Vmid::try_from(raw)
+                    .map_err(|_| "vmid must be 100..=999999".to_string())?
+            } else {
+                guest_guard(state, &params)?
+            };
             let confirm = params
                 .get("confirm")
                 .and_then(|v| v.as_bool())
