@@ -31,9 +31,9 @@ pub enum ApiError {
         path: String,
         reason: String,
     },
-    #[error("unauthorized for {method} {path}")]
+    #[error("unauthorized for {method} {path} (check the token id and secret)")]
     Unauthorized { method: &'static str, path: String },
-    #[error("forbidden for {method} {path} (token lacks privilege)")]
+    #[error("forbidden for {method} {path} — the token is valid but lacks privilege (PVEAuditor on /vms + /nodes covers the read surface; Datacenter -> Permissions -> the token, Propagate on)")]
     Forbidden { method: &'static str, path: String },
     #[error("login requires two-factor authentication")]
     TfaRequired,
@@ -580,6 +580,19 @@ pub(crate) fn urlencoding_encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forbidden_message_names_the_fix() {
+        // Cross-review precedent (pve-events/agent-cloud): a 403 must tell
+        // the operator WHICH role to grant, not just "denied".
+        let e = ApiError::Forbidden {
+            method: "GET",
+            path: "/nodes".to_string(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("PVEAuditor"), "403 message must name the role: {msg}");
+        assert!(msg.contains("token"), "403 message must say it is the token: {msg}");
+    }
 
     #[test]
     fn urlencoding_encodes_specials() {

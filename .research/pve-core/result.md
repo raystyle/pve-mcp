@@ -37,3 +37,9 @@
 ## 回路
 
 无失败回路（首次全绿）。
+
+## 补充轮（2026-11-27，token 主通道 + 先例对照 review）
+
+- pvebot-ro@pve!mcp token 接入（ADR-001 裁定 #7）：本地配置切 token 主通道，密码降为注释备用；read 面全绿（cluster/list/status 106）
+- 先例对照（agent-cloud / pve-events / flutter_server_box）：403 消息必须点名角色与修复路径——client.rs 401/403 消息改为 actionable（Forbidden 报文含 PVEAuditor + Propagate 提示）；新测试 forbidden_message_names_the_fix 先红后绿
+- flutter_server_box 补充常量：TICKET_LIFETIME 2h、RENEW_AFTER 1h、LIFETIME_MARGIN 5min（时钟漂移+在途请求）——我们 10min margin 已覆盖同语义
