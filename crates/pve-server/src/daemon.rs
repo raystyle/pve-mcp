@@ -243,61 +243,66 @@ fn spawn_daemon_detached(config_path: Option<&Path>) -> Result<()> {
         // host creates the process, outside any caller job (herdr pattern,
         // same call shape as the wmi-rs doc example; know-mcp proven).
         let cmdline = format!("\"{}\" {}", exe.display(), args);
-        let con = match wmi::WMIConnection::new(wmi::COMLibrary::new()?) {
+        let con = match wmi::WMIConnection::new() {
             Ok(c) => c,
             Err(e) => bail!("WMI connection failed: {e}"),
         };
-        let in_params = con
-            .get_object("Win32_Process")?
-            .get_method("Create")?
-            .context("Win32_Process.Create method not found")?
-            .spawn_instance()?;
-        in_params.put_property("CommandLine", cmdline)?;
-        // DETACHED_PROCESS (herdr-runtime windows.rs form): without a
-        // startup-info the WMI host allocates a fresh console for a
-        // console-subsystem binary — a black window pops on the desktop.
-        // The flag suppresses console allocation while keeping the
-        // job-breakaway property we chose WMI for.
+        // Typed Create (herdr-runtime windows.rs form): the
+        // ProcessStartupInformation must be a serde-serialized embedded
+        // object through exec_class_method — put_property with a
+        // Variant::Object startup silently DROPS the CreateFlags
+        // (ReturnValue 0, console still allocated, black window on the
+        // desktop; herdr-ccoe cross-session bug report, reproduced).
+        #[allow(non_camel_case_types)]
+        #[derive(serde::Deserialize)]
+        struct Win32_Process;
+
+        // WMI serializes this embedded object using the matching CIM class name.
+        #[allow(non_camel_case_types)]
+        #[derive(serde::Serialize)]
+        struct Win32_ProcessStartup {
+            #[serde(rename = "CreateFlags")]
+            create_flags: u32,
+        }
+
+        #[derive(serde::Serialize)]
+        struct CreateInput {
+            #[serde(rename = "CommandLine")]
+            command_line: String,
+            #[serde(rename = "ProcessStartupInformation")]
+            process_startup_information: Win32_ProcessStartup,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct CreateOutput {
+            #[serde(rename = "ProcessId")]
+            process_id: Option<u32>,
+            #[serde(rename = "ReturnValue")]
+            return_value: u32,
+        }
+
+        // DETACHED_PROCESS: no console allocation for the console-subsystem
+        // daemon binary; the WMI host still escapes the caller's job.
         const DETACHED_PROCESS: u32 = 0x0000_0008;
-        in_params.put_property(
-            "ProcessStartupInformation",
-            wmi::Variant::Object({
-                let startup = con
-                    .get_object("Win32_ProcessStartup")
-                    .context("fetching Win32_ProcessStartup class")?;
-                startup
-                    .spawn_instance()?
-                    .put_property("CreateFlags", DETACHED_PROCESS)?;
-                startup
-            }),
-        )?;
-        let out = con.exec_method("Win32_Process", "Create", Some(&in_params))?;
-        let ret = out
-            .as_ref()
-            .and_then(|o| o.get_property("ReturnValue").ok())
-            .and_then(|v| match v {
-                wmi::Variant::I4(v) => Some(v),
-                wmi::Variant::UI4(v) => Some(v as i32),
-                _ => None,
-            })
-            .unwrap_or(0);
+        let input = CreateInput {
+            command_line: cmdline,
+            process_startup_information: Win32_ProcessStartup {
+                create_flags: DETACHED_PROCESS,
+            },
+        };
+        let output: CreateOutput = con
+            .exec_class_method::<Win32_Process, _>("Create", &input)
+            .context("WMI Win32_Process.Create failed")?;
+        if output.return_value != 0 {
+            bail!(
+                "WMI Win32_Process.Create returned error {}",
+                output.return_value
+            );
+        }
         // Process creation is asynchronous — wait_for_ready() is the
-        // authoritative check; treat 0/unknown as accepted and let the
-        // probe loop confirm.
-        if ret == 0 {
-            return Ok(());
-        }
-        let mut props = String::new();
-        if let Some(o) = &out {
-            if let Ok(names) = o.list_properties() {
-                for name in names {
-                    if let Ok(val) = o.get_property(&name) {
-                        props.push_str(&format!(" {name}={val:?}"));
-                    }
-                }
-            }
-        }
-        bail!("WMI daemon spawn failed (ret={ret};{props})");
+        // authoritative check.
+        let _ = output.process_id;
+        Ok(())
     }
     #[cfg(unix)]
     {
