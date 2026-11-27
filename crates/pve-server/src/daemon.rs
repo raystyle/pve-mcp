@@ -1056,7 +1056,21 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
             })
         }
         "vm_agent_exec" => {
-            let vmid = guest_guard(state, &params)?;
+            // Soft guard for protected guests (unlike power/delete's hard
+            // wall): exec is the only way to inspect a protected machine —
+            // a read-only `docker ps` on the lab host must stay possible.
+            // Tier + vmid checks still apply; protected membership ADDS the
+            // confirm requirement instead of refusing outright.
+            if !state.config.security.access_tier.allows_writes() {
+                return Err("access_tier is read_only — write tools disabled".to_string());
+            }
+            let vmid_raw = params
+                .get("vmid")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "vmid required".to_string())?;
+            let vmid = pve_core::Vmid::try_from(vmid_raw)
+                .map_err(|_| "vmid must be 100..=999999".to_string())?;
+            let protected_extra = state.protected_vmids.contains(vmid);
             let confirm = params
                 .get("confirm")
                 .and_then(|v| v.as_bool())
@@ -1088,7 +1102,12 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
                             "vmid": vmid.get(),
                             "command": command,
                             "args": args,
-                            "note": "pass confirm=true to execute (async: returns a pid, poll via what=status)",
+                            "protected": protected_extra,
+                            "note": if protected_extra {
+                                "vmid is protected (security.protected_vmids): exec still needs confirm=true here"
+                            } else {
+                                "pass confirm=true to execute (async: returns a pid, poll via what=status)"
+                            },
                         },
                     }));
                 }
