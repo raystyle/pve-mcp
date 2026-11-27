@@ -52,7 +52,7 @@
 | 子需求 | 状态 | 剩余 |
 | --- | --- | --- |
 | 1 架构基线 | ✅ 交付（workspace 三 crate + rmcp stdio 桥 + daemon typestate + pve-cli 三消费形态） | HTTP 传输 |
-| 2 工具表 | 🔄 14/17 交付（查询 7 + 受控 7；lxc_exec/vm_agent_exec/vm_config+migrate 待做） | 3 个工具 |
+| 2 工具表 | ✅ 17/17 交付（查询 7 + 受控 10；migrate 经单节点裁定不收） | — |
 | 3 认证双通道 | ✅ 交付（password ticket 通道实测；token/ticket 双形态代码在位） | pvebot token secret 接入可选 |
 | 4 护栏体系 | ✅ 交付（confirm 分级 + dry-run 默认 + protected_vmids + access_tier + annotations） | requiresUserInteraction 元数据 |
 | 5 破坏性操作检查门 | ✅ 交付且实测（140 关机被拒、102 幂等跳过、dry-run 计划、snapshot 非法名边界拒绝） | — |

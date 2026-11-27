@@ -392,7 +392,7 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
         "status" => Ok(json!({
             "version": env!("CARGO_PKG_VERSION"),
             "pid": std::process::id(),
-            "tools": 14,
+            "tools": 17,
         })),
         "ping" => Ok(json!({"pong": true})),
         // Read-tool dispatch: lock the shared client, run the typed query,
@@ -974,6 +974,230 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
                     }
                 }
                 other => Err(format!("unknown action {other:?}")),
+            })
+        }
+        "lxc_exec" => {
+            let vmid = guest_guard(state, &params)?;
+            let confirm = params
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let command = params
+                .get("command")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| "command required".to_string())?
+                .to_string();
+            let ssh_alias = state
+                .config
+                .pve
+                .ssh_alias
+                .clone()
+                .ok_or_else(|| "ssh_alias not configured ([pve].ssh_alias)".to_string())?;
+            run_tool(state, move |client| {
+                let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+                if guest.ty != pve_core::GuestType::Lxc {
+                    return Err(format!(
+                        "lxc_exec targets lxc guests; {vmid} is {}",
+                        guest.ty
+                    ));
+                }
+                if !confirm {
+                    return Ok(json!({
+                        "dry_run": true,
+                        "plan": {
+                            "vmid": vmid.get(),
+                            "command": command,
+                            "channel": format!("ssh {ssh_alias} pct exec"),
+                            "note": "pass confirm=true to execute",
+                        },
+                    }));
+                }
+                // Command flows as ONE ssh argument (-- separator); no
+                // host-shell interpolation happens on the local side.
+                let wrapped = format!(
+                    "pct exec {} -- sh -c '{}'",
+                    vmid.get(),
+                    command.replace('\'', "'\\''")
+                );
+                let out = client
+                    .ssh_exec(&ssh_alias, &wrapped, std::time::Duration::from_secs(30))
+                    .map_err(|e| e.to_string())?;
+                Ok(json!({
+                    "vmid": vmid.get(),
+                    "command": command,
+                    "exit": out.status,
+                    "stdout": out.stdout,
+                    "stderr": out.stderr,
+                }))
+            })
+        }
+        "vm_agent_exec" => {
+            let vmid = guest_guard(state, &params)?;
+            let confirm = params
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let command = params
+                .get("command")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| "command required".to_string())?
+                .to_string();
+            let args: Vec<String> = params
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            run_tool(state, move |client| {
+                let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+                if guest.ty != pve_core::GuestType::Qemu {
+                    return Err(format!("guest agent is qemu-only; {vmid} is {}", guest.ty));
+                }
+                if !confirm {
+                    return Ok(json!({
+                        "dry_run": true,
+                        "plan": {
+                            "vmid": vmid.get(),
+                            "command": command,
+                            "args": args,
+                            "note": "pass confirm=true to execute (async: returns a pid, poll via what=status)",
+                        },
+                    }));
+                }
+                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                let start = client
+                    .agent_exec_start(&guest, &command, &arg_refs)
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or(serde_json::Value::Null);
+                // If the caller asks to follow: poll until exited (cap at
+                // wait_timeout); otherwise return the pid immediately.
+                let pid = start.get("pid").and_then(|p| p.as_u64());
+                let follow = params.get("wait").and_then(|v| v.as_bool()).unwrap_or(true);
+                match (pid, follow) {
+                    (Some(pid), true) => {
+                        let deadline = std::time::Instant::now()
+                            + Duration::from_secs(state.config.security.wait_timeout_secs);
+                        // QGA registers the pid asynchronously: an
+                        // immediate poll races "PID does not exist". Treat
+                        // that specific 500 as "not yet", keep polling
+                        // until the deadline (one beat of grace first).
+                        std::thread::sleep(Duration::from_millis(700));
+                        // QGA frees the pid right after a fast exec exits:
+                        // "PID does not exist" can ALSO mean "already gone".
+                        // Retry a few beats; if it never registers, return
+                        // the pid so the caller can retry externally.
+                        let mut missing = 0u32;
+                        loop {
+                            let st = match client.agent_exec_status(&guest, pid) {
+                                Ok(st) => st,
+                                Err(e) if e.to_string().contains("does not exist") => {
+                                    missing += 1;
+                                    if missing > 8 {
+                                        return Ok(json!({
+                                            "vmid": vmid.get(),
+                                            "pid": pid,
+                                            "inconclusive": true,
+                                            "note": "agent reported pid missing — short-lived exec may have completed; retry or poll externally",
+                                        }));
+                                    }
+                                    std::thread::sleep(Duration::from_millis(400));
+                                    continue;
+                                }
+                                Err(e) => return Err(e.to_string()),
+                            };
+                            let exited =
+                                st.get("exited").and_then(|e| e.as_bool()).unwrap_or(false);
+                            if exited {
+                                return Ok(json!({
+                                    "vmid": vmid.get(),
+                                    "pid": pid,
+                                    "exitcode": st.get("exitcode").cloned().unwrap_or(serde_json::Value::Null),
+                                    "out": st.get("out-data").cloned().unwrap_or(serde_json::Value::Null),
+                                    "err": st.get("out-err").cloned().unwrap_or(serde_json::Value::Null),
+                                }));
+                            }
+                            if std::time::Instant::now() >= deadline {
+                                return Ok(json!({
+                                    "vmid": vmid.get(),
+                                    "pid": pid,
+                                    "timeout": true,
+                                    "note": "still running — poll again with wait=false",
+                                }));
+                            }
+                            std::thread::sleep(Duration::from_millis(500));
+                        }
+                    }
+                    (Some(pid), false) => {
+                        Ok(json!({"vmid": vmid.get(), "pid": pid, "started": true}))
+                    }
+                    (None, _) => Err(format!("guest agent returned no pid: {start}")),
+                }
+            })
+        }
+        "vm_config" => {
+            let vmid = guest_guard(state, &params)?;
+            let confirm = params
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            // fields: object of key=value pairs to set on the guest config
+            let fields_obj = params
+                .get("fields")
+                .and_then(|v| v.as_object())
+                .ok_or_else(|| "fields object required (e.g. {cores: 4})".to_string())?;
+            if fields_obj.is_empty() {
+                return Err("fields must not be empty".to_string());
+            }
+            let mut fields: Vec<(String, String)> = fields_obj
+                .iter()
+                .map(|(k, v)| {
+                    let val = match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    (k.clone(), val)
+                })
+                .collect();
+            fields.sort();
+            run_tool(state, move |client| {
+                let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+                if !confirm {
+                    return Ok(json!({
+                        "dry_run": true,
+                        "plan": {
+                            "vmid": vmid.get(),
+                            "fields": fields,
+                            "note": "pass confirm=true to execute (atomic: one bad field rejects the whole write; config re-read after failure)",
+                        },
+                    }));
+                }
+                let upid = client
+                    .guest_set_config(&guest, &fields)
+                    .map_err(|e| e.to_string())?
+                    .filter(|s| !s.is_empty());
+                // Verify after write: re-read the config keys we set
+                // (M015 — never trust exit status alone on config writes).
+                let after = client
+                    .guest_config(&guest)
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or(serde_json::Value::Null);
+                let mut applied = serde_json::Map::new();
+                for (k, want) in &fields {
+                    applied.insert(
+                        k.clone(),
+                        json!(after.get(k) == Some(&serde_json::Value::String(want.clone()))),
+                    );
+                }
+                Ok(json!({
+                    "vmid": vmid.get(),
+                    "upid": upid,
+                    "applied": applied,
+                }))
             })
         }
         "firewall_manage" => {

@@ -148,6 +148,45 @@ pub struct FirewallManageArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct LxcExecArgs {
+    /// LXC guest id.
+    pub vmid: i64,
+    /// Shell command to run inside the container.
+    pub command: String,
+    /// Dry-run until true.
+    #[serde(default)]
+    pub confirm: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct VmAgentExecArgs {
+    /// Running qemu guest id with agent enabled.
+    pub vmid: i64,
+    /// Command to execute.
+    pub command: String,
+    /// Positional arguments.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Dry-run until true.
+    #[serde(default)]
+    pub confirm: Option<bool>,
+    /// Follow to completion (default true; false returns the pid).
+    #[serde(default)]
+    pub wait: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct VmConfigArgs {
+    /// Guest id.
+    pub vmid: i64,
+    /// Config fields to set (key → value, values as strings).
+    pub fields: std::collections::BTreeMap<String, String>,
+    /// Dry-run until true.
+    #[serde(default)]
+    pub confirm: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SnapshotManageArgs {
     /// Guest id.
     pub vmid: i64,
@@ -450,6 +489,71 @@ impl PveMcpServer {
             params["pos"] = serde_json::json!(v);
         }
         forward(self.config_path.clone(), "firewall_manage", params).await
+    }
+
+    /// Run a command inside an LXC container (pct exec over SSH).
+    #[tool(
+        description = "Run a shell command inside an LXC container via pct exec over the SSH channel. lxc guests only. Output capped (4KB stdout). Dry-run until confirm=true. Requires [pve].ssh_alias configured.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn lxc_exec(
+        &self,
+        Parameters(args): Parameters<LxcExecArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let params = serde_json::json!({
+            "vmid": args.vmid,
+            "command": args.command,
+            "confirm": args.confirm.unwrap_or(false),
+        });
+        forward(self.config_path.clone(), "lxc_exec", params).await
+    }
+
+    /// Run a command inside a running VM via the guest agent (async).
+    #[tool(
+        description = "Execute a command inside a running VM through the QEMU guest agent (qemu guests with agent enabled). Async two-step: starts the exec, then polls for exit code and output (wait=true, default; wait=false returns the pid). QGA frees short-lived execs quickly — a fast command may report inconclusive (pid gone); poll again or use wait=false. Payload limit ~2800 chars (QGA argv channel truncates). Dry-run until confirm=true.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn vm_agent_exec(
+        &self,
+        Parameters(args): Parameters<VmAgentExecArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let params = serde_json::json!({
+            "vmid": args.vmid,
+            "command": args.command,
+            "args": args.args,
+            "confirm": args.confirm.unwrap_or(false),
+            "wait": args.wait.unwrap_or(true),
+        });
+        forward(self.config_path.clone(), "vm_agent_exec", params).await
+    }
+
+    /// Update guest config fields (atomic).
+    #[tool(
+        description = "Set guest config fields (cores, memory, net0, ...). Atomic per PVE: one invalid field rejects the whole write. After a write the daemon re-reads the config and reports which fields took effect. Dry-run until confirm=true.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
+    )]
+    async fn vm_config(
+        &self,
+        Parameters(args): Parameters<VmConfigArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let params = serde_json::json!({
+            "vmid": args.vmid,
+            "fields": args.fields,
+            "confirm": args.confirm.unwrap_or(false),
+        });
+        forward(self.config_path.clone(), "vm_config", params).await
     }
 }
 

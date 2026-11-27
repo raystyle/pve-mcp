@@ -112,6 +112,14 @@ pub struct TaskRow {
     pub endtime: Option<i64>,
 }
 
+/// Result of an SSH-channel exec (pct exec via host).
+#[derive(Debug, Clone)]
+pub struct SshExecOutput {
+    pub status: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
 /// One snapshot row (post `current` filtering).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SnapshotEntry {
@@ -288,6 +296,95 @@ impl PveClient {
             .and_then(|s| s.as_str())
             .unwrap_or("unknown")
             .to_string())
+    }
+
+    /// QGA guest exec (async two-step, ry-ops form): POST exec returns a
+    /// PID; poll exec-status for exit code + output. Payloads larger than
+    /// ~3k chars are rejected here — the QGA argv has a hard ~8KiB
+    /// window with base64 UTF-16LE truncation beyond that (M035).
+    pub fn agent_exec_start(
+        &mut self,
+        guest: &GuestRef,
+        command: &str,
+        args: &[&str],
+    ) -> Result<Option<serde_json::Value>, ApiError> {
+        if command.len() + args.iter().map(|a| a.len()).sum::<usize>() > 2800 {
+            return Err(ApiError::Status {
+                status: 413,
+                method: "POST",
+                path: guest.api_path() + "/agent/exec",
+                reason: "QGA payload too large (keep command + args under ~2800 chars; the argv channel truncates beyond that)".to_string(),
+            });
+        }
+        let path = format!("/{}/agent/exec", guest.api_path());
+        // PVE 9 schema: command is an ARRAY — program + arguments as one
+        // repeated form key (pvesh usage: "--command <array>"). Separate
+        // argN/arguments keys 400 with "not defined in schema".
+        let mut fields: Vec<(String, String)> = vec![("command".to_string(), command.to_string())];
+        for arg in args {
+            fields.push(("command".to_string(), arg.to_string()));
+        }
+        self.post_form(&path, &fields)
+    }
+
+    /// Poll a guest exec by its pid; returns the exec-status object
+    /// (exited, exitcode, out-data/out-err as base64).
+    pub fn agent_exec_status(
+        &mut self,
+        guest: &GuestRef,
+        pid: u64,
+    ) -> Result<serde_json::Value, ApiError> {
+        let path = format!("/{}/agent/exec-status?pid={}", guest.api_path(), pid);
+        Ok(self.get_json(&path)?.unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Update guest config (PUT config with provided key=value fields).
+    /// Atomic per PVE: one bad field rejects the whole write (M015) —
+    /// callers must re-read config after any failure.
+    pub fn guest_set_config(
+        &mut self,
+        guest: &GuestRef,
+        fields: &[(String, String)],
+    ) -> Result<Option<String>, ApiError> {
+        let path = format!("/{}/config", guest.api_path());
+        self.put_form(&path, fields)
+    }
+
+    /// SSH channel exec (pct exec for lxc, qm agent for qemu): runs on
+    /// the PVE host over the configured ssh_alias. Output is capped;
+    /// stderr merged. No shell interpolation on the alias itself.
+    pub fn ssh_exec(
+        &mut self,
+        ssh_alias: &str,
+        command: &str,
+        timeout: std::time::Duration,
+    ) -> Result<SshExecOutput, ApiError> {
+        let out = std::process::Command::new("ssh")
+            .arg(ssh_alias)
+            .arg("--")
+            .arg(command)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        let out = match out {
+            Ok(out) => out,
+            Err(e) => {
+                return Err(ApiError::Connect(format!("ssh spawn failed: {e}")));
+            }
+        };
+        let _ = timeout; // ssh inherits the agent's own ConnectTimeout
+        Ok(SshExecOutput {
+            status: out.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&out.stdout)
+                .chars()
+                .take(4096)
+                .collect(),
+            stderr: String::from_utf8_lossy(&out.stderr)
+                .chars()
+                .take(2048)
+                .collect(),
+        })
     }
 
     /// Clone a template into a new VM. Returns the task UPID (long task —
