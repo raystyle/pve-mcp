@@ -69,8 +69,8 @@
 | 配置层 | crates/pve-core/src/config.rs | TOML + app-data 目录 + 加载期 protected_vmids 验证 |
 | API 客户端 | crates/pve-core/src/client.rs + api.rs | token/ticket 双认证 + 错误分层 + typed 数据层 |
 | daemon | crates/pve-server/src/daemon.rs | typestate 生命周期 + 锁单实例 + admin plane + 护栏管道 |
-| MCP 面 | crates/pve-server/src/mcp.rs | 14 工具 + annotations |
-| CLI 面 | crates/pve-server/src/main.rs | pve-cli 名词.动词 + register + --json 信封 |
+| MCP 面 | crates/pve-server/src/mcp.rs | 17 工具 + annotations |
+| CLI 面 | crates/pve-server/src/main.rs | pve-cli 名词.动词 + install/update + --json 信封 |
 | 生命周期测试 | crates/pve-server/tests/daemon_e2e.rs | 互斥/接管/往返/活锁 4 项 |
 | 全局 lint | tools/system-lint.mjs | 10 检查资产图一致性 |
 | 三平台 peer | .research/peer-round/result.md | 常驻会话 + 坑表 + 失败分类法 |
