@@ -16,6 +16,7 @@
 4. **护栏体系**（四先例共同模式全采纳）：confirm=true 结构化错误、MCP annotations、`anthropic/requiresUserInteraction` 人审、protected_vmids、access_tier 分权、审计日志、wait_for_task 语义、dry-run 默认
 5. **破坏性操作不裸奔**：任何写面工具必须有 confirm 检查门与审计记录
 6. **跨项目部署显式确认**（2026-11-27 修正，误接 hvperv-harness 事故）：给其他仓配 MCP 接入/安装时，目标仓路径必须经用户命名确认后再动手；一次误配牵连两个仓的善后
+7. **认证主通道 = pvebot token**（2026-11-27 补录裁定）：密码 ticket 降为备用/应急通道；接入 pvebot-ro@pve!reader（PVEAuditor 最小权限）；token secret 存本地 gitignored 配置，与 root 密码同红线
 
 ### 工具表（v1 终版草案，17 工具）
 

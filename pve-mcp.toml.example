@@ -13,13 +13,12 @@ hostname = "lan-pve"
 # SSH 通道（默认后端）：免密 ssh <ssh_alias> 可用（PVE 侧须 root）
 ssh_alias = "lan-pve"
 
-# HTTPS/API 通道：二选一认证
-# 方式一：API Token（推荐；ticket 2h 过期，token 长效）
-user = "root@pam"
-token_id = ""              # 例 root@pam!pve-mcp
+# HTTPS/API 通道：token 主通道（PVEAuditor 最小权限 bot 建法见 README）
+token_id = ""              # 例 pvebot-ro@pve!mcp
 token_value = ""           # uuid
-# 方式二：密码换 ticket（2h 自动续签）
-password = ""
+# 密码 ticket 备用/应急通道（2h 自动续签；日常用 token）
+# user = "root@pam"
+# password = ""
 
 [server]
 # MCP HTTP 传输绑定地址
