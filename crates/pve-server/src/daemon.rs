@@ -129,12 +129,12 @@ impl Daemon<Bound> {
 
 impl Daemon<Ready> {
     /// Serve the admin plane: one JSON-per-line connection, thread each.
-    /// Never returns while healthy. The PVE client moves into the admin
-    /// state when tools land; until then it is parked here.
+    /// Never returns while healthy. The PVE client lives behind a mutex in
+    /// the admin state — the ticket session is mutable, so calls serialize.
     pub fn serve(self, listener: TcpListener, client: PveClient) -> Result<()> {
-        let _client = client; // parked until the tool surface wires in
         let state = Arc::new(AdminState {
             config: self.config,
+            client: std::sync::Mutex::new(client),
         });
         for stream in listener.incoming() {
             match stream {
@@ -157,9 +157,11 @@ impl Daemon<Ready> {
 }
 
 struct AdminState {
-    // Read by tool handlers as they land; silenced until then.
+    // Held for the tool handlers landing next (vm_power etc. read the
+    // security config: protected_vmids, access_tier).
     #[allow(dead_code)]
     config: Config,
+    client: std::sync::Mutex<PveClient>,
 }
 
 // ---------------------------------------------------------------------------
@@ -206,13 +208,21 @@ fn spawn_daemon_detached(config_path: Option<&Path>) -> Result<()> {
     let exe = std::env::current_exe().context("resolving current exe")?;
     let mut args = String::from("daemon");
     if let Some(path) = config_path {
-        args.push_str(&format!(" --config \"{}\"", path.display()));
+        // WMI hosts the new process with cwd=System32: relative config
+        // paths resolve there and the daemon dies before binding. The
+        // path must be absolute before it is echoed.
+        let absolute = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        args.push_str(&format!(" --config \"{}\"", absolute.display()));
     }
     // CRITICAL: detached spawns on Windows do not inherit the caller's
     // environment reliably; echo the port dir explicitly so the spawned
-    // daemon writes its port where THIS caller is looking.
+    // daemon writes its port where THIS caller is looking. Absolute for
+    // the same System32-cwd reason ("/tmp/x" is drive-relative).
     if let Some(dir) = std::env::var_os("PVE_MCP_PORT_DIR") {
-        args.push_str(&format!(" --port-dir \"{}\"", dir.to_string_lossy()));
+        let dir = std::path::PathBuf::from(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let absolute = dunce::canonicalize(&dir).unwrap_or(dir);
+        args.push_str(&format!(" --port-dir \"{}\"", absolute.display()));
     }
     #[cfg(windows)]
     {
@@ -373,17 +383,116 @@ fn serve_connection(stream: TcpStream, state: &Arc<AdminState>) -> Result<()> {
     }
 }
 
-fn handle_admin(request: Value, _state: &Arc<AdminState>) -> Option<String> {
+fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
     let method = request.get("method")?.as_str()?.to_string();
     let id = request.get("id").cloned();
-    let _params = request.get("params").cloned().unwrap_or(Value::Null);
+    let params = request.get("params").cloned().unwrap_or(Value::Null);
+    let started = std::time::Instant::now();
     let result: std::result::Result<Value, String> = match method.as_str() {
         "status" => Ok(json!({
             "version": env!("CARGO_PKG_VERSION"),
             "pid": std::process::id(),
-            "tool_surface": "scaffold",
+            "tools": 3,
         })),
         "ping" => Ok(json!({"pong": true})),
+        // Read-tool dispatch: lock the shared client, run the typed query,
+        // shape a compact reply. PVE API errors surface with their reason.
+        "cluster_status" => run_tool(state, |client| {
+            let version = client
+                .api_version()
+                .map_err(|e| e.to_string())?
+                .map(|v| v.version)
+                .unwrap_or_else(|| "unknown".to_string());
+            let nodes = client
+                .cluster_nodes()
+                .map_err(|e| e.to_string())?
+                .unwrap_or_default();
+            let guests = client
+                .cluster_guests()
+                .map_err(|e| e.to_string())?
+                .unwrap_or_default();
+            let running = guests
+                .iter()
+                .filter(|g| g.status.as_deref() == Some("running"))
+                .count();
+            Ok(json!({
+                "pve_version": version,
+                "nodes": nodes.iter().map(|n| json!({
+                    "node": n.node,
+                    "status": n.status,
+                    "cpu": n.cpu,
+                    "maxcpu": n.maxcpu,
+                    "mem_gb": n.mem.map(|m| m / 1024 / 1024 / 1024),
+                    "maxmem_gb": n.maxmem.map(|m| m / 1024 / 1024 / 1024),
+                    "uptime_s": n.uptime,
+                })).collect::<Vec<_>>(),
+                "guests": {
+                    "total": guests.len(),
+                    "running": running,
+                    "qemu": guests.iter().filter(|g| g.ty == "qemu").count(),
+                    "lxc": guests.iter().filter(|g| g.ty == "lxc").count(),
+                },
+            }))
+        }),
+        "vm_list" => run_tool(state, |client| {
+            let guests = client
+                .cluster_guests()
+                .map_err(|e| e.to_string())?
+                .unwrap_or_default();
+            // Optional filters from params.
+            let ty_filter = params.get("ty").and_then(|v| v.as_str()).map(String::from);
+            let status_filter = params
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let rows: Vec<Value> = guests
+                .into_iter()
+                .filter(|g| ty_filter.as_deref().is_none_or(|t| g.ty == t))
+                .filter(|g| {
+                    status_filter
+                        .as_deref()
+                        .is_none_or(|s| g.status.as_deref() == Some(s))
+                })
+                .map(|g| {
+                    json!({
+                        "vmid": g.vmid,
+                        "name": g.name,
+                        "ty": g.ty,
+                        "status": g.status,
+                        "node": g.node,
+                        "template": g.is_template(),
+                        "mem_gb": g.maxmem.map(|m| m / 1024 / 1024 / 1024),
+                        "disk_gb": g.maxdisk.map(|m| m / 1024 / 1024 / 1024),
+                        "maxcpu": g.maxcpu,
+                    })
+                })
+                .collect();
+            Ok(json!({"count": rows.len(), "guests": rows}))
+        }),
+        "vm_status" => run_tool(state, |client| {
+            let vmid_raw = params
+                .get("vmid")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "vmid required".to_string())?;
+            let vmid = pve_core::domain::Vmid::try_from(vmid_raw)
+                .map_err(|_| "vmid must be 100..=999999".to_string())?;
+            let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+            let current = client
+                .guest_current(&guest)
+                .map_err(|e| e.to_string())?
+                .unwrap_or(Value::Null);
+            let config = client
+                .guest_config(&guest)
+                .map_err(|e| e.to_string())?
+                .unwrap_or(Value::Null);
+            Ok(json!({
+                "vmid": vmid.get(),
+                "node": guest.node.to_string(),
+                "ty": guest.ty.to_string(),
+                "current": current,
+                "config": config,
+            }))
+        }),
         "stop" => {
             let _ = std::fs::remove_file(port_file());
             let _ = std::fs::remove_file(port_dir().join("daemon.lock"));
@@ -395,11 +504,25 @@ fn handle_admin(request: Value, _state: &Arc<AdminState>) -> Option<String> {
         }
         other => Err(format!("unknown method: {other}")),
     };
+    tracing::debug!(method = %method, elapsed_ms = started.elapsed().as_millis(), "admin request");
     let payload = match result {
         Ok(value) => json!({"id": id, "result": value}),
         Err(err) => json!({"id": id, "error": err}),
     };
     Some(payload.to_string())
+}
+
+/// Serialize a tool call against the shared client. Lock poisoning is a
+/// daemon bug (panic while holding) — surfaced as an error, never a panic.
+fn run_tool<F>(state: &Arc<AdminState>, f: F) -> std::result::Result<Value, String>
+where
+    F: FnOnce(&mut PveClient) -> std::result::Result<Value, String>,
+{
+    let mut guard = state
+        .client
+        .lock()
+        .map_err(|_| "client lock poisoned".to_string())?;
+    f(&mut guard)
 }
 
 // ---------------------------------------------------------------------------

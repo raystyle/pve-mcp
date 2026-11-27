@@ -1,6 +1,8 @@
 //! pve-mcp — daemon, MCP server and CLI entry point.
 
+mod client_bridge;
 mod daemon;
+mod mcp;
 
 use std::path::PathBuf;
 
@@ -52,7 +54,7 @@ async fn main() -> Result<()> {
         Command::Daemon => daemon::run_daemon(cli.config, None),
         Command::Status => run_status(cli.config).await,
         Command::Stop => run_stop().await,
-        Command::Mcp => anyhow::bail!("MCP stdio surface lands with the tool table"),
+        Command::Mcp => mcp::serve_stdio(cli.config).await,
         Command::Http => anyhow::bail!("MCP HTTP surface lands with the tool table"),
     }
 }

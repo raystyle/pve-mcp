@@ -4,6 +4,7 @@
 //! (MCP tool args, TOML config, API responses) and passed unvalidated
 //! thereafter. See `.claude/rules/rust-dev.md`.
 
+pub mod api;
 pub mod client;
 pub mod config;
 pub mod domain;
