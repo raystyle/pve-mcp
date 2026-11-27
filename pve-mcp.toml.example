@@ -1,0 +1,20 @@
+# pve-mcp 配置示例。复制为 pve-mcp.toml 后填写（pve-mcp.toml 已 gitignore，凭据绝不进 git）。
+# 查找顺序：--config > PVE_MCP_CONFIG 环境变量 > exe 同目录 > 工作目录。
+
+[pve]
+# PVE Web/API 地址（自签证书时 verify_ssl = false）
+host = "192.168.88.88"
+port = 8006
+verify_ssl = false
+hostname = "lan-pve"
+
+# SSH 通道（默认后端）：免密 ssh <ssh_alias> 可用，执行 pvesh/qm/pct
+ssh_alias = "lan-pve"
+
+# HTTPS/API 通道：二选一认证
+# 方式一：API Token（推荐；ticket 2h 过期，token 长效）
+user = "root@pam"
+token_id = ""              # 例 root@pam!pve-mcp
+token_value = ""           # uuid
+# 方式二：密码换 ticket（2h 自动续签）
+password = ""

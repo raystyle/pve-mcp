@@ -1,0 +1,73 @@
+{
+  "plansDirectory": ".claude/plans",
+  "permissions": {
+    "allow": [
+      "Bash(cargo build*)",
+      "Bash(cargo check*)",
+      "Bash(cargo test*)",
+      "Bash(cargo nextest run*)",
+      "Bash(cargo clippy*)",
+      "Bash(cargo fmt*)",
+      "Bash(cargo doc*)",
+      "Bash(cargo tree*)",
+      "Bash(cargo metadata*)",
+      "Bash(cargo install cargo-nextest)",
+      "Bash(cargo install just)",
+      "Bash(just *)",
+      "Bash(just)",
+      "Bash(git status)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git branch*)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git init*)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(gh api repos/raystyle/pve-harness/*)",
+      "Bash(gh repo view raystyle/pve-harness*)",
+      "Bash(ls *)",
+      "Bash(ls)",
+      "Bash(node --version)",
+      "Read(//D/repos/pve-mcp/**)",
+      "Read(//D/repos/know-mcp/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR}/.claude/hooks/with-node.sh\" \"${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-dangerous.mjs\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR}/.claude/hooks/with-node.sh\" \"${CLAUDE_PROJECT_DIR}/.claude/hooks/verify-evidence.mjs\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR}/.claude/hooks/with-node.sh\" \"${CLAUDE_PROJECT_DIR}/.claude/hooks/archive-session.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
