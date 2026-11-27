@@ -2,13 +2,21 @@
 name: work-state
 description: pve-mcp 当前工作状态快照（阶段、已完成、下一步）
 metadata:
+  node_type: memory
   type: project
+  originSessionId: 4c157d31-8ac3-4802-b05d-514d1319b0f9
+  modified: 2026-11-27T08:13:22.995Z
 ---
 
-# 工作状态
+# 工作状态（2026-11-27 更新）
 
-- 阶段：开发体系闭环已落地；ADR-001 工具表终版草案（17 工具，单节点极致方向）；代码零动工
-- 已落地：四资产、hooks×4、reviewer + REVIEW.md、.ad_records 001+002、.research 先例研究×4（体系/rust 模式/集群清点/先例工具矩阵）
-- 关键裁定（用户确认）：品牌类型 + 状态机机制（已固化 rust-dev.md 规则）；远程仓 raystyle/pve-mcp（PUBLIC 空）；PVE = lan-pve（192.168.88.88:8006 / tailscale 10.10.10.7），mesh key root 免密，root 密码已存 pve-mcp.toml（gitignored）
-- 下一步：ADR-001 用户终审 → workspace 脚手架（pve-core 域类型先行）→ git init + 推远程
+- 阶段：ADR-001 工具表 8/17 交付；MCP 项目级接入验收通过；独立审查首轮跑批中
+- 代码：45 测试 × 3 平台全绿；远程已推（a8fd936→7130ee4 链）
+- MCP 接入形态（用户裁定）：项目级 `.mcp.json`（untracked），名字 `pve-mcp`，非 user-scope
+- 五连测实录：cluster_status / vm_list lxc / vm_status 102 / 140 关机被护 / create dry-run 126
+- 独立审查：reviewer 代理正在跑首轮（blocking/report 分级），结论归档 `.review/`
+- 待办：审查结论处理 → 剩余 9 工具（vm_metrics/vm_agent/backup_manage/firewall_manage/lxc_exec/vm_agent_exec/vm_config/migrate/HTTP 传输）→ pvebot token 接入
+- peer 会话驻留：lan-mac/t1p、lan-ubuntu/t2c（pve-mcp 工作台，`~/repos/pve-mcp`）
+- 关键教训已固化：verify skill 坑表（spawn 绝对路径/全地址/信任对话框/CRLF/假绿）；E0382 根因借用化；daemon-run 隐藏动词
 
+关联：[[pve-environment]] [[decisions-pending]]

@@ -51,16 +51,32 @@
 
 | 子需求 | 状态 | 剩余 |
 | --- | --- | --- |
-| 1 架构基线 | 未开始 | workspace 脚手架 |
-| 2 工具表 | ✅ 终版草案（本 ADR） | 用户终审 |
-| 3 认证双通道 | ✅ 环境已实测（mesh key root/ray 免密；pvebot token ACL 在位） | token secret 接入 |
-| 4 护栏体系 | ✅ 设计定稿（先例驱动） | 实现随工具面 |
-| 5 破坏性操作检查门 | 设计含于 4 | 实现验证 |
+| 1 架构基线 | ✅ 交付（workspace 三 crate + rmcp stdio 桥 + daemon typestate + pve-cli 三消费形态） | HTTP 传输 |
+| 2 工具表 | 🔄 8/17 交付（查询 3 + 受控 5；vm_metrics/vm_agent/backup/firewall/lxc_exec/vm_agent_exec/vm_config/migrate 待做） | 9 个工具 |
+| 3 认证双通道 | ✅ 交付（password ticket 通道实测；token/ticket 双形态代码在位） | pvebot token secret 接入可选 |
+| 4 护栏体系 | ✅ 交付（confirm 分级 + dry-run 默认 + protected_vmids + access_tier + annotations） | requiresUserInteraction 元数据 |
+| 5 破坏性操作检查门 | ✅ 交付且实测（140 关机被拒、102 幂等跳过、dry-run 计划、snapshot 非法名边界拒绝） | — |
+| 三平台验证 | ✅ 首战全绿（Windows + lan-mac + lan-ubuntu，45/45 × 3） | 每次推送后 peer 轮 |
+| MCP 实际接入 | ✅ 项目级 .mcp.json 验收（cluster_status/vm_list/vm_status/护栏/dry-run 五连测通过） | — |
 
 ## 最终产物
 
-（交付时回填）
+| 产物 | 路径 | 一句话 |
+| --- | --- | --- |
+| 域类型层 | crates/pve-core/src/domain.rs | 品牌 newtype（构造即校验，三边界） |
+| 配置层 | crates/pve-core/src/config.rs | TOML + app-data 目录 + 加载期 protected_vmids 验证 |
+| API 客户端 | crates/pve-core/src/client.rs + api.rs | token/ticket 双认证 + 错误分层 + typed 数据层 |
+| daemon | crates/pve-server/src/daemon.rs | typestate 生命周期 + 锁单实例 + admin plane + 护栏管道 |
+| MCP 面 | crates/pve-server/src/mcp.rs | 8 工具 + annotations |
+| CLI 面 | crates/pve-server/src/main.rs | pve-cli 名词.动词 + register + --json 信封 |
+| 生命周期测试 | crates/pve-server/tests/daemon_e2e.rs | 互斥/接管/往返/活锁 4 项 |
+| 全局 lint | tools/system-lint.mjs | 10 检查资产图一致性 |
+| 三平台 peer | .research/peer-round/result.md | 常驻会话 + 坑表 + 失败分类法 |
 
 ## 是否满足需求
 
-（验证后回填）
+**部分满足**（2026-11-27 阶段判定）：
+
+- 架构/认证/护栏/检查门子需求全部交付且真实集群实测（证据：五连测实录 + 45×3 三平台全绿 + peer-round result.md）
+- 工具表 8/17：核心查询与受控操作域已闭环；9 个待做（v1 收尾项见工具表）
+- 独立审查进行中（结论出来后回填）

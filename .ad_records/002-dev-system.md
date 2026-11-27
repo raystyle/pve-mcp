@@ -23,25 +23,29 @@
 | ----------------- | -------- | -------------------------------- |
 | 1 四资产          | ✅ 完成  | —                                |
 | 2 主闭环约定      | ✅ 完成  | implement/ship 专项 skill 未建   |
-| 3 Rust 域适配     | ✅ 完成  | justfile 随代码动工落地          |
-| 4 hooks 检查门      | ✅ 完成  | git init 后接 .git/HEAD 门标记   |
-| 5 独立审查        | ✅ 完成  | git init 后正本切 main 读取      |
-| 6 决策跟踪        | ✅ 完成  | —                                |
-| 7 受控双语        | ✅ 完成  | 术语表经使用增删                 |
-| git init          | ❌ 未做  | 待用户决定；init 后首 commit 建 main |
+| 3 Rust 域适配     | ✅ 完成  | —（justfile 已落地，45 测试在跑）|
+| 4 hooks 检查门    | ✅ 完成  | —（.git/HEAD 门标记已接；CRLF 经 .gitattributes 修复） |
+| 5 独立审查        | 🔄 进行中 | reviewer 代理首轮审查跑批中（规则从 main 读） |
+| 6 决策跟踪        | ✅ 完成  | 001/002 均实施中                 |
+| 7 受控双语        | ✅ 完成  | 术语执法进 system-lint 实战（抓 10+ 违例） |
+| git init + 远程   | ✅ 完成  | main 已推送 github.com/raystyle/pve-mcp |
+| 三平台 peer 轮    | ✅ 首战全绿 | 每次推送后常态轮（verify skill 固化） |
+| 全局 lint         | ✅ 完成  | system-lint 10 检查进 just ci    |
 
 ## 最终产物
 
 | 产物           | 路径                                                                                          |
 | -------------- | --------------------------------------------------------------------------------------------- |
-| 四资产全套     | `CLAUDE.md`、`.claude/README.md`、`.claude/rules/`（4 文件）、`.claude/skills/`（4 skill）、`.claude/memory/` |
+| 四资产全套     | `CLAUDE.md`、`.claude/README.md`、`.claude/rules/`（4 文件）、`.claude/skills/`（5 skill 含 pve-api）、`.claude/memory/` |
 | 审查体系       | `REVIEW.md`、`.claude/agents/reviewer.md`、`.review/`                                          |
 | 决策跟踪       | `.ad_records/`（README + 001 + 002）                                                          |
-| hooks 检查门     | `.claude/hooks/`（guard-dangerous / verify-evidence / archive-session / with-node）           |
-| 配置           | `.claude/settings.json`（权限 + hooks + plansDirectory）、`.claude/settings.local.json`       |
-| 研究库         | `.research/`（README + dev-system/ + feature-scan/）                                           |
-| 先例研究       | `.research/dev-system/notes.md`（tapo / keeler / #34132 结论）                                 |
+| hooks 检查门   | `.claude/hooks/`（guard-dangerous / verify-evidence / archive-session / with-node）           |
+| 配置           | `.claude/settings.json`（权限 + hooks + plansDirectory）、`.claude/settings.local.json`、`.mcp.json`（项目级，untracked） |
+| 研究库         | `.research/`（README + dev-system/ + feature-scan/ + peer-round/）                             |
+| 全局 lint      | `tools/system-lint.mjs`（10 检查）+ `.gitattributes`（LF 钉死）                                |
+| 构建门         | `justfile`（fmt → clippy → nextest → doc → system-lint）                                       |
+| 先例研究       | `.research/dev-system/`（体系/rust 模式/PVE 客户端/system-lint 四份 notes）                    |
 
 ## 是否满足需求
 
-（验证后回填）
+**满足**（2026-11-27 判定）：体系闭环全环运转——首战三平台 peer 轮抓出 3 个 Windows 盲区 bug 并修复收口（`.research/peer-round/result.md`）；system-lint 实战抓 20+ 违例；hooks 在真实开发中两次自我执法（拦 ad-hoc pvesh 写、拦凭据入测试）。剩余：独立审查首轮结论归档、implement/ship 专项 skill。
