@@ -10,7 +10,7 @@ metadata:
 
 # 工作状态（2026-11-27 更新）
 
-- 阶段：ADR-001 工具表 8/17 交付；MCP 项目级接入验收通过；独立审查首轮跑批中
+- 阶段：ADR-001 工具表 14/17 交付；审查 0003（blocking 已修 + 4 report 已修）；剩 lxc_exec/vm_agent_exec/vm_config|migrate
 - 代码：45 测试 × 3 平台全绿；远程已推（a8fd936→7130ee4 链）
 - MCP 接入形态（用户裁定）：项目级 `.mcp.json`（untracked），名字 `pve-mcp`，非 user-scope
 - 五连测实录：cluster_status / vm_list lxc / vm_status 102 / 140 关机被护 / create dry-run 126

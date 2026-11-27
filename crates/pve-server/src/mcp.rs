@@ -68,6 +68,86 @@ pub struct VmDeleteArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct VmMetricsArgs {
+    /// Guest id.
+    pub vmid: i64,
+    /// RRD timeframe: hour | day | week | month | year.
+    #[serde(default)]
+    pub timeframe: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct VmAgentArgs {
+    /// Guest id (running qemu guest with agent enabled).
+    pub vmid: i64,
+    /// ping | osinfo | interfaces (IP discovery).
+    #[serde(default)]
+    pub what: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StorageListArgs {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TaskStatusArgs {
+    /// Task UPID (embeds the node).
+    pub upid: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BackupManageArgs {
+    /// list | run | restore.
+    pub action: String,
+    /// Guest id (run).
+    #[serde(default)]
+    pub vmid: Option<i64>,
+    /// Storage name (run default local; list filters).
+    #[serde(default)]
+    pub storage: Option<String>,
+    /// Backup volid to restore (restore).
+    #[serde(default)]
+    pub archive: Option<String>,
+    /// New vmid for the restored guest (restore; never in-place).
+    #[serde(default)]
+    pub new_vmid: Option<i64>,
+    /// Dry-run until true (run/restore).
+    #[serde(default)]
+    pub confirm: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FirewallManageArgs {
+    /// Guest id.
+    pub vmid: i64,
+    /// list | create | delete.
+    pub action: String,
+    /// ACCEPT | DROP | REJECT (create).
+    #[serde(default, rename = "action_rule")]
+    pub action_rule: Option<String>,
+    /// in | out (create).
+    #[serde(default)]
+    pub ty: Option<String>,
+    /// Destination port (create).
+    #[serde(default)]
+    pub dport: Option<String>,
+    /// tcp | udp | icmp (create).
+    #[serde(default)]
+    pub proto: Option<String>,
+    /// Source address/CIDR (create).
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Rule comment (create).
+    #[serde(default)]
+    pub comment: Option<String>,
+    /// Rule position from list (delete).
+    #[serde(default)]
+    pub pos: Option<i64>,
+    /// Dry-run until true (create/delete).
+    #[serde(default)]
+    pub confirm: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SnapshotManageArgs {
     /// Guest id.
     pub vmid: i64,
@@ -234,6 +314,142 @@ impl PveMcpServer {
             params["description"] = serde_json::json!(desc);
         }
         forward(self.config_path.clone(), "snapshot_manage", params).await
+    }
+
+    /// RRD metrics for one guest.
+    #[tool(
+        description = "Historical metrics (RRD) for one guest: cpu, memory, network, disk over the chosen timeframe (hour|day|week|month|year, default hour). Rows are evenly down-sampled to keep the reply compact. Read-only.",
+        annotations(read_only_hint = true, destructive_hint = false)
+    )]
+    async fn vm_metrics(
+        &self,
+        Parameters(args): Parameters<VmMetricsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let params = serde_json::json!({
+            "vmid": args.vmid,
+            "timeframe": args.timeframe.unwrap_or_else(|| "hour".to_string()),
+        });
+        forward(self.config_path.clone(), "vm_metrics", params).await
+    }
+
+    /// QGA read surface: ping / osinfo / network interfaces.
+    #[tool(
+        description = "QEMU guest agent read queries for a running VM. what: ping (agent reachable?), osinfo (OS name/version), interfaces (network interfaces with IP addresses). qemu guests only; requires guest agent enabled. Read-only.",
+        annotations(read_only_hint = true, destructive_hint = false)
+    )]
+    async fn vm_agent(
+        &self,
+        Parameters(args): Parameters<VmAgentArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let params = serde_json::json!({
+            "vmid": args.vmid,
+            "what": args.what.unwrap_or_else(|| "ping".to_string()),
+        });
+        forward(self.config_path.clone(), "vm_agent", params).await
+    }
+
+    /// Storage definitions + usage.
+    #[tool(
+        description = "List storages with per-node usage (total/used GB). Read-only.",
+        annotations(read_only_hint = true, destructive_hint = false)
+    )]
+    async fn storage_list(
+        &self,
+        Parameters(_args): Parameters<StorageListArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        forward(
+            self.config_path.clone(),
+            "storage_list",
+            serde_json::json!({}),
+        )
+        .await
+    }
+
+    /// Task status + log tail by UPID.
+    #[tool(
+        description = "Status and log tail of one task by UPID (returned by any long-running operation). Read-only.",
+        annotations(read_only_hint = true, destructive_hint = false)
+    )]
+    async fn task_status(
+        &self,
+        Parameters(args): Parameters<TaskStatusArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let params = serde_json::json!({"upid": args.upid});
+        forward(self.config_path.clone(), "task_status", params).await
+    }
+
+    /// vzdump backup run / list / restore.
+    #[tool(
+        description = "vzdump backups. Actions: list (backup archives on a storage), run (snapshot-mode vzdump of one guest; dry-run until confirm=true, waits for the task), restore (creates a NEW vmid from an archive — never in-place; dry-run until confirm=true; waits). protected_vmids apply to run targets and restore target ids.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn backup_manage(
+        &self,
+        Parameters(args): Parameters<BackupManageArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut params = serde_json::json!({
+            "action": args.action,
+            "confirm": args.confirm.unwrap_or(false),
+        });
+        if let Some(v) = args.vmid {
+            params["vmid"] = serde_json::json!(v);
+        }
+        if let Some(v) = &args.storage {
+            params["storage"] = serde_json::json!(v);
+        }
+        if let Some(v) = &args.archive {
+            params["archive"] = serde_json::json!(v);
+        }
+        if let Some(v) = args.new_vmid {
+            params["new_vmid"] = serde_json::json!(v);
+        }
+        forward(self.config_path.clone(), "backup_manage", params).await
+    }
+
+    /// Guest firewall rules (list/create/delete).
+    #[tool(
+        description = "Guest-level firewall rules (per-VM). Actions: list (rules with positions), create (rule fields: action_rule ACCEPT|DROP|REJECT, ty in|out, dport, proto, source, comment; dry-run until confirm=true), delete (by pos from list; dry-run until confirm=true). protected_vmids apply to create/delete.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn firewall_manage(
+        &self,
+        Parameters(args): Parameters<FirewallManageArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut params = serde_json::json!({
+            "vmid": args.vmid,
+            "action": args.action,
+            "confirm": args.confirm.unwrap_or(false),
+        });
+        if let Some(v) = &args.action_rule {
+            params["action_rule"] = serde_json::json!(v);
+        }
+        if let Some(v) = &args.ty {
+            params["ty"] = serde_json::json!(v);
+        }
+        if let Some(v) = &args.dport {
+            params["dport"] = serde_json::json!(v);
+        }
+        if let Some(v) = &args.proto {
+            params["proto"] = serde_json::json!(v);
+        }
+        if let Some(v) = &args.source {
+            params["source"] = serde_json::json!(v);
+        }
+        if let Some(v) = &args.comment {
+            params["comment"] = serde_json::json!(v);
+        }
+        if let Some(v) = args.pos {
+            params["pos"] = serde_json::json!(v);
+        }
+        forward(self.config_path.clone(), "firewall_manage", params).await
     }
 }
 

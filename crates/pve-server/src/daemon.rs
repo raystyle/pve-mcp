@@ -392,7 +392,7 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
         "status" => Ok(json!({
             "version": env!("CARGO_PKG_VERSION"),
             "pid": std::process::id(),
-            "tools": 8,
+            "tools": 14,
         })),
         "ping" => Ok(json!({"pong": true})),
         // Read-tool dispatch: lock the shared client, run the typed query,
@@ -492,6 +492,118 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
                 "current": current,
                 "config": config,
             }))
+        }),
+        "vm_metrics" => run_tool(state, |client| {
+            let vmid_raw = params
+                .get("vmid")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "vmid required".to_string())?;
+            let vmid = pve_core::domain::Vmid::try_from(vmid_raw)
+                .map_err(|_| "vmid must be 100..=999999".to_string())?;
+            let timeframe = params
+                .get("timeframe")
+                .and_then(|v| v.as_str())
+                .unwrap_or("hour");
+            if !matches!(timeframe, "hour" | "day" | "week" | "month" | "year") {
+                return Err(format!(
+                    "timeframe must be hour|day|week|month|year, got {timeframe:?}"
+                ));
+            }
+            let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+            let data = client
+                .guest_rrddata(&guest, timeframe)
+                .map_err(|e| e.to_string())?;
+            // Down-sample: RRD rows are dense (one per minute for hour);
+            // cap at 60 rows evenly spread to keep tool replies small.
+            let rows = downsample(&data, 60);
+            Ok(json!({
+                "vmid": vmid.get(),
+                "timeframe": timeframe,
+                "points": rows.len(),
+                "data": rows,
+            }))
+        }),
+        "vm_agent" => run_tool(state, |client| {
+            let vmid_raw = params
+                .get("vmid")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "vmid required".to_string())?;
+            let vmid = pve_core::domain::Vmid::try_from(vmid_raw)
+                .map_err(|_| "vmid must be 100..=999999".to_string())?;
+            let what = params
+                .get("what")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ping");
+            let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+            if guest.ty != pve_core::GuestType::Qemu {
+                return Err(format!("QGA is qemu-only; guest {vmid} is {}", guest.ty));
+            }
+            match what {
+                "ping" => {
+                    let ok = client.agent_ping(&guest).map_err(|e| e.to_string())?;
+                    Ok(json!({"vmid": vmid.get(), "agent_reachable": ok}))
+                }
+                "osinfo" => {
+                    let info = client.agent_osinfo(&guest).map_err(|e| e.to_string())?;
+                    Ok(json!({"vmid": vmid.get(), "osinfo": info}))
+                }
+                "interfaces" => {
+                    let ifs = client.agent_interfaces(&guest).map_err(|e| e.to_string())?;
+                    Ok(json!({"vmid": vmid.get(), "interfaces": ifs}))
+                }
+                other => Err(format!(
+                    "what must be ping|osinfo|interfaces, got {other:?}"
+                )),
+            }
+        }),
+        "storage_list" => run_tool(state, |client| {
+            let defs = client.storage_list().map_err(|e| e.to_string())?;
+            let mut rows = Vec::new();
+            for def in defs {
+                // Merge per-node usage for the first node (single-node
+                // cluster: usage lives under /nodes/{node}/storage).
+                let node = pve_core::domain::NodeName::try_from("lan-pve".to_string())
+                    .map_err(|e| e.to_string())?;
+                let usage = client
+                    .node_storage(&node)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .find(|u| u.storage == def.storage);
+                rows.push(json!({
+                    "storage": def.storage,
+                    "ty": def.ty,
+                    "content": def.content,
+                    "total_gb": usage.as_ref().and_then(|u| u.total.map(|b| b / 1024 / 1024 / 1024)),
+                    "used_gb": usage.as_ref().and_then(|u| u.used.map(|b| b / 1024 / 1024 / 1024)),
+                }));
+            }
+            Ok(json!({"count": rows.len(), "storages": rows}))
+        }),
+        "task_status" => run_tool(state, |client| {
+            let upid_raw = params
+                .get("upid")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "upid required".to_string())?
+                .to_string();
+            let upid =
+                pve_core::domain::Upid::try_from(upid_raw.clone()).map_err(|e| e.to_string())?;
+            // UPID embeds the node — no separate node parameter.
+            let node = upid
+                .as_str()
+                .split(':')
+                .nth(1)
+                .ok_or_else(|| "UPID has no node field".to_string())?;
+            let node = pve_core::domain::NodeName::try_from(node.to_string())
+                .map_err(|e| e.to_string())?;
+            let path = format!("/nodes/{}/tasks/{}/status", node, upid);
+            let status: Value = client
+                .get_json(&path)
+                .map_err(|e| e.to_string())?
+                .unwrap_or(Value::Null);
+            let log = client
+                .task_log_tail(&node, &upid, 20)
+                .map_err(|e| e.to_string())?;
+            Ok(json!({"upid": upid_raw, "status": status, "log_tail": log}))
         }),
         "vm_power" => {
             let vmid = guest_guard(state, &params)?;
@@ -696,6 +808,271 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
                 }
             })
         }
+        "backup_manage" => {
+            let action = params
+                .get("action")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "action required (list|run|restore)".to_string())?
+                .to_string();
+            let confirm = params
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            // list is pure read; run/restore go through the write gate.
+            let target = if action == "list" {
+                None
+            } else {
+                Some(guest_guard(state, &params)?)
+            };
+            run_tool(state, move |client| match action.as_str() {
+                "list" => {
+                    let node = pve_core::domain::NodeName::try_from("lan-pve".to_string())
+                        .map_err(|e| e.to_string())?;
+                    let store = params
+                        .get("storage")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("local");
+                    let path = format!(
+                        "/nodes/{}/storage/{}/content?content=backup",
+                        node,
+                        pve_core::domain::StorageName::try_from(store.to_string())
+                            .map_err(|e| e.to_string())?
+                            .as_str()
+                    );
+                    let rows: Vec<Value> = client
+                        .get_json(&path)
+                        .map_err(|e| e.to_string())?
+                        .unwrap_or_default();
+                    Ok(json!({"count": rows.len(), "backups": rows}))
+                }
+                "run" => {
+                    let vmid = target.expect("guest_guard produced the target");
+                    let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+                    if !confirm {
+                        return Ok(json!({
+                            "dry_run": true,
+                            "plan": {
+                                "action": "vzdump",
+                                "vmid": vmid.get(),
+                                "storage": params.get("storage").and_then(|v| v.as_str()).unwrap_or("local"),
+                                "mode": "snapshot",
+                                "note": "pass confirm=true to execute",
+                            },
+                        }));
+                    }
+                    let store = params
+                        .get("storage")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("local");
+                    let storage = pve_core::domain::StorageName::try_from(store.to_string())
+                        .map_err(|e| e.to_string())?;
+                    let path = format!("/nodes/{}/vzdump", guest.node);
+                    let upid = client
+                        .post_fields(
+                            &path,
+                            &[
+                                ("vmid".to_string(), vmid.get().to_string()),
+                                ("storage".to_string(), storage.as_str().to_string()),
+                                ("mode".to_string(), "snapshot".to_string()),
+                                ("compress".to_string(), "zstd".to_string()),
+                            ],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    let upid = upid
+                        .and_then(|v| v.as_str().map(String::from))
+                        .filter(|s| !s.is_empty());
+                    match upid {
+                        Some(raw) => {
+                            let upid = pve_core::domain::Upid::try_from(raw.clone())
+                                .map_err(|e| e.to_string())?;
+                            let timeout =
+                                Duration::from_secs(state.config.security.wait_timeout_secs);
+                            let (ok, exit, log) = client
+                                .wait_task(&guest.node, &upid, timeout)
+                                .map_err(|e| e.to_string())?;
+                            Ok(json!({
+                                "vmid": vmid.get(),
+                                "upid": raw,
+                                "ok": ok,
+                                "exitstatus": exit,
+                                "log_tail": log,
+                            }))
+                        }
+                        None => Ok(json!({"vmid": vmid.get(), "upid": null})),
+                    }
+                }
+                "restore" => {
+                    // Deliberately minimal: restore archives by creating a
+                    // NEW vmid (never in-place) — the archive param names
+                    // a volid from backup list.
+                    let archive = params
+                        .get("archive")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.trim().is_empty())
+                        .ok_or_else(|| "archive volid required (from backup list)".to_string())?
+                        .to_string();
+                    let new_raw =
+                        params
+                            .get("new_vmid")
+                            .and_then(|v| v.as_i64())
+                            .ok_or_else(|| {
+                                "new_vmid required (restore never overwrites in place)".to_string()
+                            })?;
+                    let new_vmid = pve_core::domain::Vmid::try_from(new_raw)
+                        .map_err(|_| "new_vmid must be 100..=999999".to_string())?;
+                    if state.protected_vmids.contains(new_vmid) {
+                        return Err(format!(
+                            "new_vmid {} is inside the protected span — pick another id",
+                            new_vmid.get()
+                        ));
+                    }
+                    if !confirm {
+                        return Ok(json!({
+                            "dry_run": true,
+                            "plan": {
+                                "action": "restore",
+                                "archive": archive,
+                                "new_vmid": new_vmid.get(),
+                                "note": "pass confirm=true to execute (creates a NEW vm; never in-place)",
+                            },
+                        }));
+                    }
+                    let node = pve_core::domain::NodeName::try_from("lan-pve".to_string())
+                        .map_err(|e| e.to_string())?;
+                    let path = format!("/nodes/{}/qemu", node);
+                    let upid = client
+                        .post_fields(
+                            &path,
+                            &[
+                                ("vmid".to_string(), new_vmid.get().to_string()),
+                                ("archive".to_string(), archive),
+                                ("storage".to_string(), "local-lvm".to_string()),
+                            ],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    let upid = upid
+                        .and_then(|v| v.as_str().map(String::from))
+                        .filter(|s| !s.is_empty());
+                    match upid {
+                        Some(raw) => {
+                            let upid = pve_core::domain::Upid::try_from(raw.clone())
+                                .map_err(|e| e.to_string())?;
+                            let timeout =
+                                Duration::from_secs(state.config.security.wait_timeout_secs);
+                            let (ok, exit, log) = client
+                                .wait_task(&node, &upid, timeout)
+                                .map_err(|e| e.to_string())?;
+                            Ok(json!({
+                                "new_vmid": new_vmid.get(),
+                                "upid": raw,
+                                "ok": ok,
+                                "exitstatus": exit,
+                                "log_tail": log,
+                            }))
+                        }
+                        None => Ok(json!({"new_vmid": new_vmid.get(), "upid": null})),
+                    }
+                }
+                other => Err(format!("unknown action {other:?}")),
+            })
+        }
+        "firewall_manage" => {
+            let action = params
+                .get("action")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "action required (list|create|delete)".to_string())?
+                .to_string();
+            let confirm = params
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let vmid = if action == "list" {
+                let raw = params
+                    .get("vmid")
+                    .and_then(|v| v.as_i64())
+                    .ok_or_else(|| "vmid required".to_string())?;
+                pve_core::Vmid::try_from(raw)
+                    .map_err(|_| "vmid must be 100..=999999".to_string())?
+            } else {
+                guest_guard(state, &params)?
+            };
+            run_tool(state, move |client| {
+                let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+                let base = format!("/{}/firewall/rules", guest.api_path());
+                match action.as_str() {
+                    "list" => {
+                        let rows: Vec<Value> = client
+                            .get_json(&base)
+                            .map_err(|e| e.to_string())?
+                            .unwrap_or_default();
+                        Ok(json!({"vmid": vmid.get(), "rules": rows, "count": rows.len()}))
+                    }
+                    "create" => {
+                        // Required firewall fields; the daemon validates
+                        // shape, PVE validates semantics.
+                        let mut fields: Vec<(String, String)> = Vec::new();
+                        // action_rule carries ACCEPT|DROP|REJECT; the PVE
+                        // field name is "action" — map at the boundary.
+                        if let Some(v) = params.get("action_rule").and_then(|v| v.as_str()) {
+                            fields.push(("action".to_string(), v.to_string()));
+                        }
+                        for key in ["ty", "dport", "proto", "source", "comment"] {
+                            if let Some(v) = params.get(key).and_then(|v| v.as_str()) {
+                                fields.push((key.to_string(), v.to_string()));
+                            }
+                        }
+                        if !fields.iter().any(|(k, _)| k == "action") {
+                            return Err("action_rule (ACCEPT|DROP|REJECT) required".to_string());
+                        }
+                        if !confirm {
+                            return Ok(json!({
+                                "dry_run": true,
+                                "plan": {
+                                    "vmid": vmid.get(),
+                                    "action": "create",
+                                    "fields": fields.into_iter().map(|(k, v)| json!({"k": k, "v": v})).collect::<Vec<_>>(),
+                                    "note": "pass confirm=true to execute",
+                                },
+                            }));
+                        }
+                        let upid = client
+                            .post_fields(&base, &fields)
+                            .map_err(|e| e.to_string())?
+                            .and_then(|v| v.as_str().map(String::from))
+                            .filter(|s| !s.is_empty());
+                        Ok(json!({"vmid": vmid.get(), "upid": upid, "waited": false}))
+                    }
+                    "delete" => {
+                        let pos = params
+                            .get("pos")
+                            .and_then(|v| v.as_i64())
+                            .ok_or_else(|| "pos (rule position from list) required".to_string())?;
+                        if pos < 0 {
+                            return Err("pos must be >= 0".to_string());
+                        }
+                        if !confirm {
+                            return Ok(json!({
+                                "dry_run": true,
+                                "plan": {
+                                    "vmid": vmid.get(),
+                                    "action": "delete",
+                                    "pos": pos,
+                                    "note": "pass confirm=true to execute",
+                                },
+                            }));
+                        }
+                        let path = format!("{}/{}", base, pos);
+                        let upid = client
+                            .delete_query(&path, &[])
+                            .map_err(|e| e.to_string())?
+                            .and_then(|v| v.as_str().map(String::from))
+                            .filter(|s| !s.is_empty());
+                        Ok(json!({"vmid": vmid.get(), "pos": pos, "upid": upid, "waited": false}))
+                    }
+                    other => Err(format!("unknown action {other:?}")),
+                }
+            })
+        }
         "snapshot_manage" => {
             let action = params
                 .get("action")
@@ -850,6 +1227,21 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
 
 /// Serialize a tool call against the shared client. Lock poisoning is a
 /// daemon bug (panic while holding) — surfaced as an error, never a panic.
+/// Evenly-spaced subsample of RRD rows (keeps tool replies small without
+/// losing the shape of the curve).
+fn downsample(rows: &[Value], cap: usize) -> Vec<Value> {
+    if rows.len() <= cap {
+        return rows.to_vec();
+    }
+    let step = rows.len() as f64 / cap as f64;
+    (0..cap)
+        .map(|i| {
+            let idx = ((i as f64) * step).floor() as usize;
+            rows[idx.min(rows.len() - 1)].clone()
+        })
+        .collect()
+}
+
 fn run_tool<F>(state: &Arc<AdminState>, f: F) -> std::result::Result<Value, String>
 where
     F: FnOnce(&mut PveClient) -> std::result::Result<Value, String>,

@@ -564,7 +564,7 @@ fn append_query(path: &str, query: &[(String, String)]) -> String {
 
 /// Minimal percent-encoding for form/query values: everything except
 /// unreserved RFC 3986 characters. Passwords with `!@#` etc. must not go raw.
-fn urlencoding_encode(value: &str) -> String {
+pub(crate) fn urlencoding_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         match byte {

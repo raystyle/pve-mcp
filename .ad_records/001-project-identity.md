@@ -52,7 +52,7 @@
 | 子需求 | 状态 | 剩余 |
 | --- | --- | --- |
 | 1 架构基线 | ✅ 交付（workspace 三 crate + rmcp stdio 桥 + daemon typestate + pve-cli 三消费形态） | HTTP 传输 |
-| 2 工具表 | 🔄 8/17 交付（查询 3 + 受控 5；vm_metrics/vm_agent/backup/firewall/lxc_exec/vm_agent_exec/vm_config/migrate 待做） | 9 个工具 |
+| 2 工具表 | 🔄 14/17 交付（查询 7 + 受控 7；lxc_exec/vm_agent_exec/vm_config+migrate 待做） | 3 个工具 |
 | 3 认证双通道 | ✅ 交付（password ticket 通道实测；token/ticket 双形态代码在位） | pvebot token secret 接入可选 |
 | 4 护栏体系 | ✅ 交付（confirm 分级 + dry-run 默认 + protected_vmids + access_tier + annotations） | requiresUserInteraction 元数据 |
 | 5 破坏性操作检查门 | ✅ 交付且实测（140 关机被拒、102 幂等跳过、dry-run 计划、snapshot 非法名边界拒绝） | — |
@@ -67,7 +67,7 @@
 | 配置层 | crates/pve-core/src/config.rs | TOML + app-data 目录 + 加载期 protected_vmids 验证 |
 | API 客户端 | crates/pve-core/src/client.rs + api.rs | token/ticket 双认证 + 错误分层 + typed 数据层 |
 | daemon | crates/pve-server/src/daemon.rs | typestate 生命周期 + 锁单实例 + admin plane + 护栏管道 |
-| MCP 面 | crates/pve-server/src/mcp.rs | 8 工具 + annotations |
+| MCP 面 | crates/pve-server/src/mcp.rs | 14 工具 + annotations |
 | CLI 面 | crates/pve-server/src/main.rs | pve-cli 名词.动词 + register + --json 信封 |
 | 生命周期测试 | crates/pve-server/tests/daemon_e2e.rs | 互斥/接管/往返/活锁 4 项 |
 | 全局 lint | tools/system-lint.mjs | 10 检查资产图一致性 |

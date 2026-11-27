@@ -2,8 +2,9 @@
 
 use serde::Deserialize;
 
+use crate::client::urlencoding_encode;
 use crate::client::{ApiError, Method, PveClient};
-use crate::domain::{GuestRef, GuestType, NodeName, SnapshotName, Vmid};
+use crate::domain::{GuestRef, GuestType, NodeName, SnapshotName, StorageName, Vmid};
 
 /// One guest row from /cluster/resources?type=vm (qemu + lxc together —
 /// the caller filters by `ty`).
@@ -64,6 +65,51 @@ pub struct NodeSummary {
     pub maxmem: Option<u64>,
     #[serde(default)]
     pub uptime: Option<u64>,
+}
+
+/// Storage definition row (GET /storage).
+#[derive(Debug, Clone, Deserialize)]
+pub struct StorageDef {
+    pub storage: String,
+    #[serde(rename = "type")]
+    pub ty: String,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub nodes: Option<String>,
+}
+
+/// Per-node storage usage row (GET /nodes/{node}/storage).
+#[derive(Debug, Clone, Deserialize)]
+pub struct StorageUsage {
+    pub storage: String,
+    #[serde(rename = "type")]
+    pub ty: String,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub total: Option<u64>,
+    #[serde(default)]
+    pub used: Option<u64>,
+    #[serde(default)]
+    pub active: Option<u64>,
+}
+
+/// Task row (GET /nodes/{node}/tasks).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskRow {
+    #[serde(default)]
+    pub upid: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(rename = "type", default)]
+    pub worker_type: Option<String>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub starttime: Option<i64>,
+    #[serde(default)]
+    pub endtime: Option<i64>,
 }
 
 /// One snapshot row (post `current` filtering).
@@ -323,6 +369,94 @@ impl PveClient {
     ) -> Result<Option<String>, ApiError> {
         let path = format!("/{}/snapshot/{}", guest.api_path(), name.as_str());
         self.delete(&path, &[])
+    }
+
+    // -----------------------------------------------------------------------
+    // Metrics / QGA read surface
+    // -----------------------------------------------------------------------
+
+    /// RRD metrics for one guest. `timeframe` is validated by the caller
+    /// (daemon layer); the API accepts hour|day|week|month|year.
+    pub fn guest_rrddata(
+        &mut self,
+        guest: &GuestRef,
+        timeframe: &str,
+    ) -> Result<Vec<serde_json::Value>, ApiError> {
+        let path = format!(
+            "/{}/rrddata?timeframe={}&cf=AVERAGE",
+            guest.api_path(),
+            urlencoding_encode(timeframe)
+        );
+        Ok(self.get_json(&path)?.unwrap_or_default())
+    }
+
+    /// Node-level RRD metrics.
+    pub fn node_rrddata(
+        &mut self,
+        node: &NodeName,
+        timeframe: &str,
+    ) -> Result<Vec<serde_json::Value>, ApiError> {
+        let path = format!(
+            "/nodes/{}/rrddata?timeframe={}&cf=AVERAGE",
+            node,
+            urlencoding_encode(timeframe)
+        );
+        Ok(self.get_json(&path)?.unwrap_or_default())
+    }
+
+    /// QGA ping (guest agent reachable?). Only meaningful on a running
+    /// qemu guest with agent enabled.
+    pub fn agent_ping(&mut self, guest: &GuestRef) -> Result<bool, ApiError> {
+        let path = format!("/{}/agent/ping", guest.api_path());
+        match self.get_json::<serde_json::Value>(&path) {
+            Ok(_) => Ok(true),
+            Err(ApiError::Forbidden { .. }) => Ok(false),
+            Err(ApiError::Status { status: 500, .. }) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// QGA osinfo (running qemu guest with agent).
+    pub fn agent_osinfo(&mut self, guest: &GuestRef) -> Result<serde_json::Value, ApiError> {
+        let path = format!("/{}/agent/get-osinfo", guest.api_path());
+        Ok(self.get_json(&path)?.unwrap_or(serde_json::Value::Null))
+    }
+
+    /// QGA network interfaces (IP discovery for a running guest).
+    pub fn agent_interfaces(&mut self, guest: &GuestRef) -> Result<serde_json::Value, ApiError> {
+        let path = format!("/{}/agent/network-get-interfaces", guest.api_path());
+        Ok(self.get_json(&path)?.unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Storage list (definitions + per-node usage merged by the caller).
+    pub fn storage_list(&mut self) -> Result<Vec<StorageDef>, ApiError> {
+        Ok(self.get_json("/storage")?.unwrap_or_default())
+    }
+
+    /// Per-node storage usage rows.
+    pub fn node_storage(&mut self, node: &NodeName) -> Result<Vec<StorageUsage>, ApiError> {
+        let path = format!("/nodes/{}/storage", node);
+        Ok(self.get_json(&path)?.unwrap_or_default())
+    }
+
+    /// Storage content listing (ISOs, backups, templates).
+    pub fn storage_content(
+        &mut self,
+        node: &NodeName,
+        storage: &StorageName,
+        content: Option<&str>,
+    ) -> Result<Vec<serde_json::Value>, ApiError> {
+        let mut path = format!("/nodes/{}/storage/{}/content", node, storage);
+        if let Some(content) = content {
+            path.push_str(&format!("?content={}", urlencoding_encode(content)));
+        }
+        Ok(self.get_json(&path)?.unwrap_or_default())
+    }
+
+    /// Task list for one node, most recent first (limit applied by caller).
+    pub fn node_tasks(&mut self, node: &NodeName, limit: u32) -> Result<Vec<TaskRow>, ApiError> {
+        let path = format!("/nodes/{}/tasks?limit={}", node, limit);
+        Ok(self.get_json(&path)?.unwrap_or_default())
     }
 
     /// Method enum re-export for callers building raw requests.
