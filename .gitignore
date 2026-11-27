@@ -19,3 +19,4 @@ Cargo.lock.bak
 # 项目级 MCP 注册（指向本机构建产物，各人各配）
 .mcp.json
 .claude/sessions/prompt-extract.txt
+.claude/sessions/recent-intents.txt
