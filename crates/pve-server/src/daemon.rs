@@ -253,6 +253,24 @@ fn spawn_daemon_detached(config_path: Option<&Path>) -> Result<()> {
             .context("Win32_Process.Create method not found")?
             .spawn_instance()?;
         in_params.put_property("CommandLine", cmdline)?;
+        // DETACHED_PROCESS (herdr-runtime windows.rs form): without a
+        // startup-info the WMI host allocates a fresh console for a
+        // console-subsystem binary — a black window pops on the desktop.
+        // The flag suppresses console allocation while keeping the
+        // job-breakaway property we chose WMI for.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        in_params.put_property(
+            "ProcessStartupInformation",
+            wmi::Variant::Object({
+                let startup = con
+                    .get_object("Win32_ProcessStartup")
+                    .context("fetching Win32_ProcessStartup class")?;
+                startup
+                    .spawn_instance()?
+                    .put_property("CreateFlags", DETACHED_PROCESS)?;
+                startup
+            }),
+        )?;
         let out = con.exec_method("Win32_Process", "Create", Some(&in_params))?;
         let ret = out
             .as_ref()
