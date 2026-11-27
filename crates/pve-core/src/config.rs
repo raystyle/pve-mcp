@@ -11,7 +11,36 @@ use serde::Deserialize;
 use crate::domain::VmidSet;
 use crate::error::Result;
 
+/// The app's per-user data directory: `%APPDATA%/pve-mcp` on Windows,
+/// `$XDG_CONFIG_HOME/pve-mcp` (or `~/.config/pve-mcp`) elsewhere. Home of
+/// the standard config path and the daemon port/lock files.
+pub fn app_data_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("PVE_MCP_HOME") {
+        return Some(PathBuf::from(dir));
+    }
+    #[cfg(windows)]
+    {
+        std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("pve-mcp"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+            .map(|d| d.join("pve-mcp"))
+    }
+}
+
+/// Config lookup order: `--config` > `PVE_MCP_CONFIG` env > app data dir
+/// (`%APPDATA%/pve-mcp/pve-mcp.toml`, the deployed standard location) >
+/// exe-adjacent > working directory.
 pub fn default_config_path() -> Option<PathBuf> {
+    if let Some(dir) = app_data_dir() {
+        let candidate = dir.join("pve-mcp.toml");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = dir.join("pve-mcp.toml");

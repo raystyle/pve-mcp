@@ -40,6 +40,10 @@ struct Cli {
 enum Command {
     /// Run the background daemon explicitly (normally auto-spawned).
     Daemon,
+    /// Internal: ensure_daemon spawns  (works from both
+    /// pve-mcp.exe and the pve-cli copy).
+    #[command(name = "daemon-run", hide = true)]
+    DaemonRun,
     /// MCP over stdio (Claude Code entry point; bridges to the daemon).
     #[command(name = "stdio")]
     Mcp,
@@ -86,10 +90,33 @@ struct PveCliArgs {
 
 #[derive(clap::Subcommand)]
 pub enum PveCliVerb {
-    /// Cluster overview (the cluster_status MCP tool).
-    ClusterStatus,
-    /// List guests (the vm_list tool); filters --ty qemu|lxc, --status.
-    VmList {
+    /// Cluster-level resources (the cluster_status / vm_list tools).
+    Cluster {
+        #[command(subcommand)]
+        command: ClusterCommand,
+    },
+    /// Guest (VM/container) operations — the vm_* MCP tools.
+    Vm {
+        #[command(subcommand)]
+        command: VmCommand,
+    },
+    /// Daemon control.
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommand,
+    },
+    /// Internal: daemon runtime — ensure_daemon spawns `<current-exe> daemon`,
+    /// and under pve-cli that exe IS pve-cli.exe (know-mcp heritage).
+    #[command(hide = true)]
+    DaemonRun,
+}
+
+#[derive(clap::Subcommand)]
+pub enum ClusterCommand {
+    /// Cluster overview: version, nodes, guest counts.
+    Status,
+    /// List guests (QEMU + LXC); filters narrow the table.
+    List {
         /// Filter qemu | lxc.
         #[arg(long)]
         ty: Option<String>,
@@ -97,24 +124,49 @@ pub enum PveCliVerb {
         #[arg(long)]
         status: Option<String>,
     },
-    /// One guest's detail (the vm_status tool).
-    VmStatus { vmid: u32 },
-    /// Power action (the vm_power tool); gated actions need --confirm.
-    VmPower {
+}
+
+#[derive(clap::Subcommand)]
+pub enum VmCommand {
+    /// Power on (ungated: changes state without destroying anything).
+    Start { vmid: u32 },
+    /// Graceful ACPI shutdown (gated: needs --confirm).
+    Shutdown {
         vmid: u32,
-        /// start | shutdown | stop | reboot | reset | suspend | resume.
-        #[arg(long)]
-        action: String,
-        /// Required for shutdown/stop/reboot/reset/suspend.
         #[arg(long)]
         confirm: bool,
-        /// Do not wait for the task (print UPID only).
-        #[arg(long)]
-        no_wait: bool,
     },
-    /// Clone a template into a new VM (the vm_create tool); dry-run until --confirm.
-    VmCreate {
-        /// New VM name.
+    /// Hard power cut (gated: needs --confirm; emergency use).
+    Stop {
+        vmid: u32,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Warm reboot (gated).
+    Reboot {
+        vmid: u32,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Hard reset button (gated).
+    Reset {
+        vmid: u32,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Pause to memory (gated).
+    Suspend {
+        vmid: u32,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Unpause (ungated).
+    Resume { vmid: u32 },
+    /// One guest's detail: runtime + config.
+    Status { vmid: u32 },
+    /// Clone a template into a new VM (dry-run until --confirm).
+    Create {
+        /// New VM name (no whitespace, no '/').
         #[arg(long)]
         name: String,
         /// Source template vmid.
@@ -127,20 +179,22 @@ pub enum PveCliVerb {
         #[arg(long)]
         confirm: bool,
     },
-    /// Destroy a stopped guest (the vm_delete tool); dry-run until --confirm.
-    VmDelete {
+    /// Destroy a stopped guest, purging disks (dry-run until --confirm;
+    /// running guests are refused even with --confirm).
+    Delete {
         vmid: u32,
         /// Execute (without: dry-run plan).
         #[arg(long)]
         confirm: bool,
     },
-    /// Daemon status (the status admin method).
-    DaemonStatus,
+}
+
+#[derive(clap::Subcommand)]
+pub enum DaemonCommand {
+    /// Daemon version/pid/tool count.
+    Status,
     /// Stop the daemon.
-    DaemonStop,
-    /// Internal: daemon runtime (ensure_daemon spawns `<exe> daemon`).
-    #[command(hide = true)]
-    Daemon,
+    Stop,
 }
 
 /// True when this process was launched through the `pve-cli` copy (the exe
@@ -169,7 +223,7 @@ async fn main() -> Result<()> {
         std::env::set_var("PVE_MCP_PORT_DIR", dir);
     }
     match cli.command {
-        Command::Daemon => daemon::run_daemon(cli.config, None),
+        Command::Daemon | Command::DaemonRun => daemon::run_daemon(cli.config, None),
         Command::Status => run_status(cli.config).await,
         Command::Stop => run_stop().await,
         Command::Mcp => mcp::serve_stdio(cli.config).await,
@@ -210,7 +264,9 @@ async fn run_cli_verb(config: Option<PathBuf>, json: bool, verb: PveCliVerb) -> 
     use serde_json::json;
     type Renderer = Box<dyn FnOnce(&serde_json::Value) -> String>;
     let (method, params, render): (&str, serde_json::Value, Renderer) = match verb {
-        PveCliVerb::ClusterStatus => (
+        PveCliVerb::Cluster {
+            command: ClusterCommand::Status,
+        } => (
             "cluster_status",
             json!({}),
             Box::new(|r| {
@@ -225,7 +281,9 @@ async fn run_cli_verb(config: Option<PathBuf>, json: bool, verb: PveCliVerb) -> 
                 )
             }),
         ),
-        PveCliVerb::VmList { ty, status } => {
+        PveCliVerb::Cluster {
+            command: ClusterCommand::List { ty, status },
+        } => {
             let mut params = json!({});
             if let Some(ty) = ty {
                 params["ty"] = json!(ty);
@@ -258,7 +316,9 @@ async fn run_cli_verb(config: Option<PathBuf>, json: bool, verb: PveCliVerb) -> 
                 }),
             )
         }
-        PveCliVerb::VmStatus { vmid } => (
+        PveCliVerb::Vm {
+            command: VmCommand::Status { vmid },
+        } => (
             "vm_status",
             json!({"vmid": vmid}),
             Box::new(|r| {
@@ -276,32 +336,35 @@ async fn run_cli_verb(config: Option<PathBuf>, json: bool, verb: PveCliVerb) -> 
                 )
             }),
         ),
-        PveCliVerb::VmPower {
-            vmid,
-            action,
-            confirm,
-            no_wait,
-        } => (
-            "vm_power",
-            json!({"vmid": vmid, "action": action, "confirm": confirm, "wait": !no_wait}),
-            Box::new(|r| {
-                if r["skipped"].as_bool().unwrap_or(false) {
-                    format!("skipped: {}", r["reason"].as_str().unwrap_or("?"))
-                } else {
-                    format!(
-                        "{}: ok={} exit={}",
-                        r["action"].as_str().unwrap_or("?"),
-                        r["ok"].as_bool().unwrap_or(false),
-                        r["exitstatus"].as_str().unwrap_or("?"),
-                    )
-                }
-            }),
-        ),
-        PveCliVerb::VmCreate {
-            name,
-            template,
-            new_vmid,
-            confirm,
+        PveCliVerb::Vm {
+            command: VmCommand::Start { vmid },
+        } => power_call(vmid, "start", false),
+        PveCliVerb::Vm {
+            command: VmCommand::Resume { vmid },
+        } => power_call(vmid, "resume", false),
+        PveCliVerb::Vm {
+            command: VmCommand::Shutdown { vmid, confirm },
+        } => power_call(vmid, "shutdown", confirm),
+        PveCliVerb::Vm {
+            command: VmCommand::Stop { vmid, confirm },
+        } => power_call(vmid, "stop", confirm),
+        PveCliVerb::Vm {
+            command: VmCommand::Reboot { vmid, confirm },
+        } => power_call(vmid, "reboot", confirm),
+        PveCliVerb::Vm {
+            command: VmCommand::Reset { vmid, confirm },
+        } => power_call(vmid, "reset", confirm),
+        PveCliVerb::Vm {
+            command: VmCommand::Suspend { vmid, confirm },
+        } => power_call(vmid, "suspend", confirm),
+        PveCliVerb::Vm {
+            command:
+                VmCommand::Create {
+                    name,
+                    template,
+                    new_vmid,
+                    confirm,
+                },
         } => {
             let mut params = json!({"name": name, "template": template, "confirm": confirm});
             if let Some(v) = new_vmid {
@@ -330,7 +393,9 @@ async fn run_cli_verb(config: Option<PathBuf>, json: bool, verb: PveCliVerb) -> 
                 }),
             )
         }
-        PveCliVerb::VmDelete { vmid, confirm } => (
+        PveCliVerb::Vm {
+            command: VmCommand::Delete { vmid, confirm },
+        } => (
             "vm_delete",
             json!({"vmid": vmid, "confirm": confirm}),
             Box::new(|r| {
@@ -352,9 +417,13 @@ async fn run_cli_verb(config: Option<PathBuf>, json: bool, verb: PveCliVerb) -> 
                 }
             }),
         ),
-        PveCliVerb::DaemonStatus => return run_status(config).await,
-        PveCliVerb::DaemonStop => return run_stop().await,
-        PveCliVerb::Daemon => return daemon::run_daemon(config, None),
+        PveCliVerb::Daemon {
+            command: DaemonCommand::Status,
+        } => return run_status(config).await,
+        PveCliVerb::Daemon {
+            command: DaemonCommand::Stop,
+        } => return run_stop().await,
+        PveCliVerb::DaemonRun => return daemon::run_daemon(config, None),
     };
 
     daemon::ensure_daemon(config.as_deref())?;
@@ -379,9 +448,33 @@ async fn run_cli_verb(config: Option<PathBuf>, json: bool, verb: PveCliVerb) -> 
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// register (native self-copy, mcp2cli approach internalized)
-// ---------------------------------------------------------------------------
+type VerbCall = (
+    &'static str,
+    serde_json::Value,
+    Box<dyn FnOnce(&serde_json::Value) -> String>,
+);
+
+/// Shared power-verb wiring: every power subcommand lands here with its
+/// action name and confirm flag (daemon re-checks the gate anyway).
+fn power_call(vmid: u32, action: &str, confirm: bool) -> VerbCall {
+    use serde_json::json;
+    (
+        "vm_power",
+        json!({"vmid": vmid, "action": action, "confirm": confirm, "wait": true}),
+        Box::new(|r| {
+            if r["skipped"].as_bool().unwrap_or(false) {
+                format!("skipped: {}", r["reason"].as_str().unwrap_or("?"))
+            } else {
+                format!(
+                    "{}: ok={} exit={}",
+                    r["action"].as_str().unwrap_or("?"),
+                    r["ok"].as_bool().unwrap_or(false),
+                    r["exitstatus"].as_str().unwrap_or("?"),
+                )
+            }
+        }),
+    )
+}
 
 fn run_register(install_dir: Option<PathBuf>, force: bool) -> Result<()> {
     let exe = std::env::current_exe().context("resolving current exe")?;

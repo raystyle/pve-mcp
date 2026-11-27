@@ -171,7 +171,7 @@ struct AdminState {
 pub fn port_dir() -> PathBuf {
     std::env::var_os("PVE_MCP_PORT_DIR")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("pve-mcp")))
+        .or_else(pve_core::config::app_data_dir)
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
@@ -206,7 +206,7 @@ pub fn ensure_daemon(config_path: Option<&Path>) -> Result<()> {
 
 fn spawn_daemon_detached(config_path: Option<&Path>) -> Result<()> {
     let exe = std::env::current_exe().context("resolving current exe")?;
-    let mut args = String::from("daemon");
+    let mut args = String::from("daemon-run");
     // The WMI child resolves relative paths against System32, and its cwd
     // cannot see the caller's pve-mcp.toml — resolve the default config
     // HERE (caller's cwd / exe dir) and echo it absolutely. Without this

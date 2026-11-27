@@ -52,3 +52,16 @@
 
 - 测试↔工具对齐（工具面落地后：每个 MCP 工具名有按名测试）
 - 工具表注册表投影（ADR-001 工具落地后：代码注册表 ↔ docs 工具表互查，NANDI TOOLS.md CI 再生模式）
+
+## 附：CLI 命令形态先例（2026-11-27 补）
+
+用户裁定：不完全对齐 pve-harness 手搓语法，研究业界标准。结论（az/gcloud/kubectl/docker/gh 一致范式）：
+
+1. **名词.动词两级层级**：`az vm start` / `kubectl get pods` / `gh pr list`——域对象做名词、动作做动词；不用 `vm-power --action start` 的单动词+旗标形态
+2. **对象身份位置参数**：`docker stop <c>`、`qm start <vmid>`——vmid 位置参数保留
+3. **kebab-case**：`--new-vmid`（snake_case 是旗标违例）
+4. **动作动词化**：power 的七个 action 拆成 `vm start/shutdown/stop/reboot/reset/suspend/resume` 七个子命令，各自 confirm 语义内建（start 免确认、stop 必须 --confirm）——比 `--action` 字符串参数类型安全（clap 枚举）
+5. **`--json` 机器信封**：gh 同款；默认人类可读表
+6. **全局旗标前置**：`--config/--port-dir/--json` global
+
+落地：pve-cli 二级子命令重构（vm start 等）；admin 面 method/params 契约不变（1:1 映射保持）。
