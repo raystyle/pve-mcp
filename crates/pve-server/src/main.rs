@@ -533,12 +533,19 @@ async fn run_install(dir_override: Option<PathBuf>, force: bool) -> Result<()> {
 
     // 2. Copy both binaries (overwrite always: install into a fresh dir or
     //    update over an existing one — the verb already says intent).
+    //    Atomic replace via temp+rename: Linux ETXTBSY refuses writing a
+    //    binary a live process holds, but rename() replaces it cleanly
+    //    (peer-round lan-ubuntu finding); Windows copy-over is unblocked
+    //    because we stopped the daemon first.
     for (src, dest, label) in [
         (&exe, &mcp_dest, "pve-mcp (MCP stdio server)"),
         (&exe, &cli_dest, "pve-cli (verb CLI)"),
     ] {
-        std::fs::copy(src, dest)
-            .with_context(|| format!("copying {} -> {}", src.display(), dest.display()))?;
+        let tmp = dest.with_extension("tmp");
+        std::fs::copy(src, &tmp)
+            .with_context(|| format!("copying {} -> {}", src.display(), tmp.display()))?;
+        std::fs::rename(&tmp, dest)
+            .with_context(|| format!("activating {} -> {}", tmp.display(), dest.display()))?;
         println!("[{verb}] {label}: {}", dest.display());
     }
 

@@ -63,6 +63,9 @@ description: 验证流程：跑检查门（just ci：fmt → clippy -D warnings 
 | `name_taken` | 旧 vulnforge peer（peer-mac/peer-linux）占名 | 换新名（pve-peer-mac 等）；勿 kill 用户旧会话 |
 | 信任/imports 对话框挡住 | 新 clone 仓首次进入 | `hc keys <addr> down enter` 两步：信任目录 → 允许外部导入 |
 | `NEXEST=missing` | peer 未装 cargo-nextest | 派发任务里带 `cargo install cargo-nextest --locked` 前置步 |
+| Monitor idle 误报 |  state=done 时 terminal 可能仍在跑（build 中） | 等待条件用  而非 done |
+| install 时 peer 机无 toml | pve-mcp.toml 是 gitignored 凭据文件，peer 机没有 | 冷启动 fail-closed 是正确行为；实调测试需先给 peer 配置（或 SKIP 声明） |
+| update 遇 ETXTBSY (os error 26) | Linux 内核锁活进程持有的二进制 | install 用 temp+rename 原子替换（已修） |
 | 假绿（GATE_EXIT=0 但报错） | `just ci ... ; echo` 分号吞退出码；just 配方内管道 `cmd | tail; echo EXIT=$?` 拿的是 tail 的退出码 | 派发语句用 `&&` 链；让 peer 报每阶段退出码而非只报最后 echo |
 
 **peer 轮失败分类（三类处置不同，混同会误修）**：
