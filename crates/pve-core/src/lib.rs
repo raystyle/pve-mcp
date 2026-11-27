@@ -10,5 +10,8 @@ pub mod config;
 pub mod domain;
 pub mod error;
 
-pub use domain::{GuestRef, GuestType, NodeName, SnapshotName, StorageName, Upid, Vmid, VmidRange};
+pub use api::PowerAction;
+pub use domain::{
+    GuestRef, GuestType, NodeName, SnapshotName, StorageName, Upid, Vmid, VmidRange, VmidSet,
+};
 pub use error::{DomainError, Result};

@@ -30,6 +30,43 @@ pub struct VmStatusArgs {
     pub vmid: i64,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct VmPowerArgs {
+    /// Guest id (100..=999999).
+    pub vmid: i64,
+    /// One of: start | shutdown | stop | reboot | reset | suspend | resume.
+    pub action: String,
+    /// Required for shutdown/stop/reboot/reset/suspend (start/resume ungated).
+    #[serde(default)]
+    pub confirm: Option<bool>,
+    /// Wait for the task to finish (default true).
+    #[serde(default)]
+    pub wait: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct VmCreateArgs {
+    /// Name for the new VM (no whitespace, no '/').
+    pub name: String,
+    /// Source template vmid (must be a qemu template).
+    pub template: i64,
+    /// Explicit new vmid; omit to take the cluster's next free id.
+    #[serde(default)]
+    pub new_vmid: Option<i64>,
+    /// Dry-run until true.
+    #[serde(default)]
+    pub confirm: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct VmDeleteArgs {
+    /// Guest id to destroy.
+    pub vmid: i64,
+    /// Dry-run until true. Running guests are refused even with confirm.
+    #[serde(default)]
+    pub confirm: Option<bool>,
+}
+
 #[derive(Clone)]
 pub struct PveMcpServer {
     config_path: Option<std::path::PathBuf>,
@@ -87,6 +124,72 @@ impl PveMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let params = serde_json::json!({"vmid": args.vmid});
         forward(self.config_path.clone(), "vm_status", params).await
+    }
+
+    /// Power actions with idempotence and confirm gating.
+    #[tool(
+        description = "Power action on a guest. Actions: start, shutdown (ACPI), stop (hard cut), reboot, reset, suspend, resume. Idempotent: an action whose target state is already reached is skipped without writing. shutdown/stop/reboot/reset/suspend require confirm=true. Waits for the task by default (wait=false returns the UPID immediately).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
+    )]
+    async fn vm_power(
+        &self,
+        Parameters(args): Parameters<VmPowerArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let params = serde_json::json!({
+            "vmid": args.vmid,
+            "action": args.action,
+            "confirm": args.confirm.unwrap_or(false),
+            "wait": args.wait.unwrap_or(true),
+        });
+        forward(self.config_path.clone(), "vm_power", params).await
+    }
+
+    /// Clone a template into a new VM (dry-run by default).
+    #[tool(
+        description = "Clone a QEMU template into a new VM. Dry-run by default: without confirm=true it returns the plan (next free vmid, source node, name) without writing. confirm=true executes the clone and waits for it. Name must not contain whitespace or '/'.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
+    )]
+    async fn vm_create(
+        &self,
+        Parameters(args): Parameters<VmCreateArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut params = serde_json::json!({
+            "template": args.template,
+            "name": args.name,
+            "confirm": args.confirm.unwrap_or(false),
+        });
+        if let Some(new_vmid) = args.new_vmid {
+            params["new_vmid"] = serde_json::json!(new_vmid);
+        }
+        forward(self.config_path.clone(), "vm_create", params).await
+    }
+
+    /// Destroy a stopped guest, purging disks (dry-run by default).
+    #[tool(
+        description = "Destroy a guest and purge its disks. Dry-run by default (returns the plan). Refuses running guests even with confirm=true — stop first. protected_vmids from config are refused unconditionally. confirm=true executes and waits.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn vm_delete(
+        &self,
+        Parameters(args): Parameters<VmDeleteArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let params = serde_json::json!({
+            "vmid": args.vmid,
+            "confirm": args.confirm.unwrap_or(false),
+        });
+        forward(self.config_path.clone(), "vm_delete", params).await
     }
 }
 

@@ -190,9 +190,148 @@ impl PveClient {
         self.delete(path, query)
     }
 
+    // -----------------------------------------------------------------------
+    // Controlled-operation data layer. NO guardrail logic lives here —
+    // confirm gating, idempotence, protected_vmids are daemon-side policy.
+    // -----------------------------------------------------------------------
+
+    /// Next free cluster vmid (GET /cluster/nextid). Accepts numeric and
+    /// string forms (PVE has returned both across versions).
+    pub fn next_vmid(&mut self) -> Result<Option<u32>, ApiError> {
+        let raw: serde_json::Value = self
+            .get_json("/cluster/nextid")?
+            .unwrap_or(serde_json::Value::Null);
+        let id = raw
+            .as_u64()
+            .or_else(|| raw.as_str().and_then(|s| s.parse::<u64>().ok()));
+        Ok(id.map(|v| v as u32))
+    }
+
+    /// Power action POST. The daemon layer decides whether the call is
+    /// idempotent-skipped; this only executes. Returns the task UPID when
+    /// PVE reports one.
+    pub fn power_action(
+        &mut self,
+        guest: &GuestRef,
+        action: PowerAction,
+    ) -> Result<Option<String>, ApiError> {
+        let path = format!("/{}/status/{}", guest.api_path(), action.as_str());
+        self.post_form(&path, &[])
+    }
+
+    /// Current runtime status string for one guest ("running"/"stopped").
+    pub fn guest_status_str(&mut self, guest: &GuestRef) -> Result<String, ApiError> {
+        let path = format!("/{}/status/current", guest.api_path());
+        let value: serde_json::Value = self.get_json(&path)?.unwrap_or(serde_json::Value::Null);
+        Ok(value
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("unknown")
+            .to_string())
+    }
+
+    /// Clone a template into a new VM. Returns the task UPID (long task —
+    /// the caller waits via wait_task).
+    pub fn clone_vm(
+        &mut self,
+        source: &GuestRef,
+        new_vmid: Vmid,
+        name: &str,
+    ) -> Result<Option<String>, ApiError> {
+        let path = format!("/{}/clone", source.api_path());
+        self.post_form(
+            &path,
+            &[
+                ("newid".to_string(), new_vmid.get().to_string()),
+                ("name".to_string(), name.to_string()),
+                ("full".to_string(), "1".to_string()),
+            ],
+        )
+    }
+
+    /// Destroy a guest, purging disks. Returns the task UPID. The daemon
+    /// layer enforces stopped-state and protected_vmids before calling.
+    pub fn destroy_guest(&mut self, guest: &GuestRef) -> Result<Option<String>, ApiError> {
+        let path = format!("/{}", guest.api_path());
+        self.delete(
+            &path,
+            &[
+                ("purge".to_string(), "1".to_string()),
+                ("destroy-unreferenced-disks".to_string(), "1".to_string()),
+            ],
+        )
+    }
+
     /// Method enum re-export for callers building raw requests.
     pub fn method_get() -> Method {
         Method::Get
+    }
+}
+
+/// Power actions, exhaustive enum: a new action not matched everywhere is a
+/// compile error, not a runtime fallthrough.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerAction {
+    Start,
+    Shutdown,
+    Stop,
+    Reboot,
+    Reset,
+    Suspend,
+    Resume,
+}
+
+impl PowerAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Shutdown => "shutdown",
+            Self::Stop => "stop",
+            Self::Reboot => "reboot",
+            Self::Reset => "reset",
+            Self::Suspend => "suspend",
+            Self::Resume => "resume",
+        }
+    }
+
+    /// Target state for idempotence checks; None = action has no single
+    /// target state (reset/suspend/resume are relative to current state).
+    pub fn target_state(self) -> Option<&'static str> {
+        match self {
+            Self::Start => Some("running"),
+            Self::Shutdown | Self::Stop => Some("stopped"),
+            Self::Reboot => Some("running"),
+            Self::Reset | Self::Suspend | Self::Resume => None,
+        }
+    }
+
+    /// Confirm gate. start/resume deliberately ungated (NANDI precedent:
+    /// they change state without destroying anything — a gate people resent
+    /// is a gate people route around).
+    pub fn requires_confirm(self) -> bool {
+        match self {
+            Self::Start | Self::Resume => false,
+            Self::Shutdown | Self::Stop | Self::Reboot | Self::Reset | Self::Suspend => true,
+        }
+    }
+}
+
+impl std::str::FromStr for PowerAction {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "start" => Ok(Self::Start),
+            "shutdown" => Ok(Self::Shutdown),
+            "stop" => Ok(Self::Stop),
+            "reboot" => Ok(Self::Reboot),
+            "reset" => Ok(Self::Reset),
+            "suspend" => Ok(Self::Suspend),
+            "resume" => Ok(Self::Resume),
+            other => Err(format!(
+                "unknown action {other:?} (expected start|shutdown|stop|reboot|reset|suspend|resume)"
+            )),
+        }
     }
 }
 

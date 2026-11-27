@@ -266,8 +266,10 @@ impl TryFrom<String> for Upid {
                 "expected UPID:<node>:<pstart>:<pid>:<starttime>:<dtype>:<id>:<user>:",
             ));
         }
-        if parts[3].parse::<u32>().is_err() {
-            return Err(DomainError::Upid(s, "pid field is not numeric"));
+        // pid/starttime are hex per pve-common's UPID format
+        // (e.g. UPID:node:0016C602:116DC4AD:...:qmstart:104:root@pam:).
+        if u32::from_str_radix(parts[3], 16).is_err() {
+            return Err(DomainError::Upid(s, "pid field is not hex"));
         }
         Ok(Self(s))
     }
@@ -423,7 +425,8 @@ mod tests {
 
     #[test]
     fn upid_parses_valid() {
-        let raw = "UPID:lan-pve:0000ABCD:00001234:67E00000:qemustart:102:root@pam:";
+        // Real captured UPID from PVE 9.2 (hex pid + hex starttime).
+        let raw = "UPID:lan-pve:0016C602:116DC4AD:6B091185:qmstart:104:root@pam:";
         let upid = Upid::try_from(raw.to_string()).unwrap();
         assert_eq!(upid.as_str(), raw);
     }

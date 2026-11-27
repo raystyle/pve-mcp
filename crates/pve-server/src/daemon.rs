@@ -135,6 +135,7 @@ impl Daemon<Ready> {
         let state = Arc::new(AdminState {
             config: self.config,
             client: std::sync::Mutex::new(client),
+            protected_vmids: std::sync::OnceLock::new(),
         });
         for stream in listener.incoming() {
             match stream {
@@ -157,11 +158,10 @@ impl Daemon<Ready> {
 }
 
 struct AdminState {
-    // Held for the tool handlers landing next (vm_power etc. read the
-    // security config: protected_vmids, access_tier).
-    #[allow(dead_code)]
     config: Config,
     client: std::sync::Mutex<PveClient>,
+    /// Lazy-parsed protected vmid set (config string → VmidSet).
+    protected_vmids: std::sync::OnceLock<pve_core::VmidSet>,
 }
 
 // ---------------------------------------------------------------------------
@@ -388,7 +388,9 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
     let id = request.get("id").cloned();
     let params = request.get("params").cloned().unwrap_or(Value::Null);
     let started = std::time::Instant::now();
-    let result: std::result::Result<Value, String> = match method.as_str() {
+    // Wrapped in an IIFE so write arms can use `?` and `return Err` while
+    // the outer function keeps its Option<String> contract.
+    let result: std::result::Result<Value, String> = (|| match method.as_str() {
         "status" => Ok(json!({
             "version": env!("CARGO_PKG_VERSION"),
             "pid": std::process::id(),
@@ -493,6 +495,200 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
                 "config": config,
             }))
         }),
+        "vm_power" => {
+            let vmid = guest_guard(state, &params)?;
+            let confirm = params
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let wait = params.get("wait").and_then(|v| v.as_bool()).unwrap_or(true);
+            run_tool(state, move |client| {
+                let action: pve_core::PowerAction = params
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "action required".to_string())?
+                    .parse()
+                    .map_err(|e: String| e)?;
+                if action.requires_confirm() && !confirm {
+                    return Err(format!(
+                        "action {:?} is gated: pass confirm=true (shutdown/stop/reboot/reset/suspend all require it)",
+                        action.as_str()
+                    ));
+                }
+                let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+                // Idempotence: already at target state → no write sent.
+                if let Some(target) = action.target_state() {
+                    let current = client.guest_status_str(&guest).map_err(|e| e.to_string())?;
+                    if current == target {
+                        return Ok(json!({
+                            "skipped": true,
+                            "reason": format!("already {target}"),
+                            "action": action.as_str(),
+                            "vmid": vmid.get(),
+                        }));
+                    }
+                }
+                let upid = client
+                    .power_action(&guest, action)
+                    .map_err(|e| e.to_string())?
+                    .filter(|s| !s.is_empty());
+                match upid {
+                    Some(raw) if wait => {
+                        let upid = pve_core::domain::Upid::try_from(raw.clone())
+                            .map_err(|e| e.to_string())?;
+                        let timeout = Duration::from_secs(state.config.security.wait_timeout_secs);
+                        let (ok, exit, log) = client
+                            .wait_task(&guest.node, &upid, timeout)
+                            .map_err(|e| e.to_string())?;
+                        Ok(json!({
+                            "action": action.as_str(),
+                            "vmid": vmid.get(),
+                            "upid": raw,
+                            "ok": ok,
+                            "exitstatus": exit,
+                            "log_tail": log,
+                        }))
+                    }
+                    Some(raw) => Ok(
+                        json!({"action": action.as_str(), "vmid": vmid.get(), "upid": raw, "waited": false}),
+                    ),
+                    None => {
+                        Ok(json!({"action": action.as_str(), "vmid": vmid.get(), "upid": null}))
+                    }
+                }
+            })
+        }
+        "vm_create" => {
+            let confirm = params
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let name = params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| "name required".to_string())?
+                .trim()
+                .to_string();
+            if name.chars().any(|c| c.is_whitespace() || c == '/') {
+                return Err(format!(
+                    "invalid name {name:?} (whitespace and '/' rejected)"
+                ));
+            }
+            let source_raw = params
+                .get("template")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "template vmid required".to_string())?;
+            let source = pve_core::domain::Vmid::try_from(source_raw)
+                .map_err(|_| "template must be 100..=999999".to_string())?;
+            run_tool(state, move |client| {
+                let source_guest = client.locate_guest(source).map_err(|e| e.to_string())?;
+                if source_guest.ty != pve_core::GuestType::Qemu {
+                    return Err(format!("template {source} is not a qemu guest"));
+                }
+                let new_vmid: pve_core::domain::Vmid =
+                    match params.get("new_vmid").and_then(|v| v.as_i64()) {
+                        Some(raw) => pve_core::domain::Vmid::try_from(raw)
+                            .map_err(|_| "new_vmid must be 100..=999999".to_string())?,
+                        None => client
+                            .next_vmid()
+                            .map_err(|e| e.to_string())?
+                            .and_then(|v| pve_core::domain::Vmid::try_from(v).ok())
+                            .ok_or_else(|| "cluster returned no usable next id".to_string())?,
+                    };
+                if !confirm {
+                    return Ok(json!({
+                        "dry_run": true,
+                        "plan": {
+                            "new_vmid": new_vmid.get(),
+                            "source": source.get(),
+                            "source_node": source_guest.node.to_string(),
+                            "name": name,
+                            "full": true,
+                            "note": "pass confirm=true to execute",
+                        },
+                    }));
+                }
+                let upid = client
+                    .clone_vm(&source_guest, new_vmid, &name)
+                    .map_err(|e| e.to_string())?
+                    .filter(|s| !s.is_empty());
+                match upid {
+                    Some(raw) => {
+                        let upid = pve_core::domain::Upid::try_from(raw.clone())
+                            .map_err(|e| e.to_string())?;
+                        let timeout = Duration::from_secs(state.config.security.wait_timeout_secs);
+                        let (ok, exit, log) = client
+                            .wait_task(&source_guest.node, &upid, timeout)
+                            .map_err(|e| e.to_string())?;
+                        Ok(json!({
+                            "new_vmid": new_vmid.get(),
+                            "upid": raw,
+                            "ok": ok,
+                            "exitstatus": exit,
+                            "log_tail": log,
+                        }))
+                    }
+                    None => Ok(json!({"new_vmid": new_vmid.get(), "upid": null})),
+                }
+            })
+        }
+        "vm_delete" => {
+            let vmid = guest_guard(state, &params)?;
+            let confirm = params
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            run_tool(state, move |client| {
+                let guest = client.locate_guest(vmid).map_err(|e| e.to_string())?;
+                let status = client.guest_status_str(&guest).map_err(|e| e.to_string())?;
+                if !confirm {
+                    return Ok(json!({
+                        "dry_run": true,
+                        "plan": {
+                            "vmid": vmid.get(),
+                            "node": guest.node.to_string(),
+                            "ty": guest.ty.to_string(),
+                            "status": status,
+                            "purge_disks": true,
+                            "note": if status == "stopped" {
+                                "pass confirm=true to execute (guest must stay stopped)"
+                            } else {
+                                "guest is RUNNING — stop it first; delete refuses running guests"
+                            },
+                        },
+                    }));
+                }
+                if status != "stopped" {
+                    return Err(format!(
+                        "guest {} is {status} — delete refuses running guests (stop it first)",
+                        vmid.get()
+                    ));
+                }
+                let upid = client
+                    .destroy_guest(&guest)
+                    .map_err(|e| e.to_string())?
+                    .filter(|s| !s.is_empty());
+                match upid {
+                    Some(raw) => {
+                        let upid = pve_core::domain::Upid::try_from(raw.clone())
+                            .map_err(|e| e.to_string())?;
+                        let timeout = Duration::from_secs(state.config.security.wait_timeout_secs);
+                        let (ok, exit, log) = client
+                            .wait_task(&guest.node, &upid, timeout)
+                            .map_err(|e| e.to_string())?;
+                        Ok(json!({
+                            "vmid": vmid.get(),
+                            "upid": raw,
+                            "ok": ok,
+                            "exitstatus": exit,
+                            "log_tail": log,
+                        }))
+                    }
+                    None => Ok(json!({"vmid": vmid.get(), "upid": null})),
+                }
+            })
+        }
         "stop" => {
             let _ = std::fs::remove_file(port_file());
             let _ = std::fs::remove_file(port_dir().join("daemon.lock"));
@@ -503,7 +699,7 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
             Ok(json!({"stopping": true}))
         }
         other => Err(format!("unknown method: {other}")),
-    };
+    })();
     tracing::debug!(method = %method, elapsed_ms = started.elapsed().as_millis(), "admin request");
     let payload = match result {
         Ok(value) => json!({"id": id, "result": value}),
@@ -523,6 +719,33 @@ where
         .lock()
         .map_err(|_| "client lock poisoned".to_string())?;
     f(&mut guard)
+}
+
+/// Parse + protect-check an existing-guest write target. The tier check
+/// happens here too so every write arm gets both by construction.
+fn guest_guard(
+    state: &Arc<AdminState>,
+    params: &Value,
+) -> std::result::Result<pve_core::Vmid, String> {
+    if !state.config.security.access_tier.allows_writes() {
+        return Err("access_tier is read_only — write tools disabled".to_string());
+    }
+    let vmid_raw = params
+        .get("vmid")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| "vmid required".to_string())?;
+    let vmid =
+        pve_core::Vmid::try_from(vmid_raw).map_err(|_| "vmid must be 100..=999999".to_string())?;
+    let set = state
+        .protected_vmids
+        .get_or_init(|| state.config.protected_vmids_set().unwrap_or_default());
+    if set.contains(vmid) {
+        return Err(format!(
+            "vmid {} is protected (security.protected_vmids) — no tool may change it",
+            vmid.get()
+        ));
+    }
+    Ok(vmid)
 }
 
 // ---------------------------------------------------------------------------
