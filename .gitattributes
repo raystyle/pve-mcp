@@ -1,0 +1,5 @@
+# Shell scripts must stay LF: dash on Linux fails parsing CRLF (peer-round
+# catch: with-node.sh blocked every Bash call on lan-ubuntu).
+*.sh text eol=lf
+*.mjs text eol=lf
+justfile text eol=lf

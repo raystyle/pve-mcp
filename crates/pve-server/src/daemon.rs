@@ -215,8 +215,8 @@ fn spawn_daemon_detached(config_path: Option<&Path>) -> Result<()> {
     let config_path = config_path
         .map(PathBuf::from)
         .or_else(pve_core::config::default_config_path);
-    if let Some(path) = config_path {
-        let absolute = dunce::canonicalize(&path).unwrap_or(path);
+    if let Some(path) = &config_path {
+        let absolute = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
         args.push_str(&format!(" --config \"{}\"", absolute.display()));
     }
     // CRITICAL: detached spawns on Windows do not inherit the caller's
@@ -288,8 +288,11 @@ fn spawn_daemon_detached(config_path: Option<&Path>) -> Result<()> {
             .stderr(std::process::Stdio::null());
         {
             use std::os::unix::process::CommandExt;
-            // SAFETY: setsid detaches the child from the controlling
-            // terminal's process group.
+            // SAFETY: pre_exec runs between fork and exec; setsid detaches
+            // the child from the controlling terminal's process group.
+            // Audited FFI boundary, same treatment as the Windows liveness
+            // probe.
+            #[allow(unsafe_code)]
             unsafe {
                 command.pre_exec(|| {
                     if libc::setsid() < 0 {
