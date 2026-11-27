@@ -20,6 +20,7 @@
 | [dev-system](dev-system/) | Rust Claude 开发体系先例（tapo/keeler/#34132）、rust 模式、PVE 客户端生态 | ADR-002 |
 | [feature-scan](feature-scan/) | 集群清点、PVE MCP 先例工具矩阵、工具表 | ADR-001 |
 | [pve-core](pve-core/) | 域类型 + 配置 + API 客户端首增量验证 | ADR-001 |
+| [peer-round](peer-round/) | 三平台联动验证（lan-mac/lan-ubuntu 常驻 peer） | ADR-002 |
 
 ## 与 plan / ADR 的分工对齐
 
