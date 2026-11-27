@@ -1124,22 +1124,20 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
                     (Some(pid), true) => {
                         let deadline = std::time::Instant::now()
                             + Duration::from_secs(state.config.security.wait_timeout_secs);
-                        // QGA registers the pid asynchronously: an
-                        // immediate poll races "PID does not exist". Treat
-                        // that specific 500 as "not yet", keep polling
-                        // until the deadline (one beat of grace first).
-                        std::thread::sleep(Duration::from_millis(700));
-                        // QGA frees the pid right after a fast exec exits:
-                        // "PID does not exist" can ALSO mean "already gone".
-                        // Retry a few beats; if it never registers, return
-                        // the pid so the caller can retry externally.
+                        // QGA exec-status lifecycle (measured on this
+                        // cluster): record exists while running; the result
+                        // appears ~2s after exit and is consumed by the
+                        // first reader; unread results vanish ~5s later.
+                        // Fast execs (< first poll) finish during our own
+                        // pre-poll delay — never sleep before the first
+                        // poll; a fast cadence catches the result window.
                         let mut missing = 0u32;
                         loop {
                             let st = match client.agent_exec_status(&guest, pid) {
                                 Ok(st) => st,
                                 Err(e) if e.to_string().contains("does not exist") => {
                                     missing += 1;
-                                    if missing > 8 {
+                                    if missing > 10 {
                                         return Ok(json!({
                                             "vmid": vmid.get(),
                                             "pid": pid,
@@ -1147,7 +1145,7 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
                                             "note": "agent reported pid missing — short-lived exec may have completed; retry or poll externally",
                                         }));
                                     }
-                                    std::thread::sleep(Duration::from_millis(400));
+                                    std::thread::sleep(Duration::from_millis(250));
                                     continue;
                                 }
                                 Err(e) => return Err(e.to_string()),
@@ -1171,7 +1169,7 @@ fn handle_admin(request: Value, state: &Arc<AdminState>) -> Option<String> {
                                     "note": "still running — poll again with wait=false",
                                 }));
                             }
-                            std::thread::sleep(Duration::from_millis(500));
+                            std::thread::sleep(Duration::from_millis(400));
                         }
                     }
                     (Some(pid), false) => {

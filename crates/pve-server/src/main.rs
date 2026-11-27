@@ -53,16 +53,21 @@ enum Command {
     Status,
     /// Stop the running daemon.
     Stop,
-    /// Register `pve-cli`: copy this binary under the CLI name. Re-run
-    /// with --force after every pve-mcp upgrade (know-mcp heritage).
-    #[command(name = "register")]
-    Register {
-        /// Directory to place pve-cli in (default: exe-adjacent).
+    /// Install: copy pve-mcp (MCP stdio server) AND pve-cli (verb CLI)
+    /// into the user application directory and add it to the user PATH.
+    /// Replaces the old `register`. Daemon-safe; `update` is the
+    /// force-overwrite form for upgrades.
+    Install {
+        /// Override the install directory (default: %LOCALAPPDATA%/pve-mcp).
         #[arg(long)]
-        install_dir: Option<PathBuf>,
-        /// Overwrite an existing pve-cli copy.
+        dir: Option<PathBuf>,
+    },
+    /// Update: overwrite an existing install (same as install with force).
+    #[command(alias = "upgrade")]
+    Update {
+        /// Override the install directory (default: %LOCALAPPDATA%/pve-mcp).
         #[arg(long)]
-        force: bool,
+        dir: Option<PathBuf>,
     },
 }
 
@@ -228,7 +233,8 @@ async fn main() -> Result<()> {
         Command::Stop => run_stop().await,
         Command::Mcp => mcp::serve_stdio(cli.config).await,
         Command::Http => bail!("MCP HTTP surface lands with the tool table"),
-        Command::Register { install_dir, force } => run_register(install_dir, force),
+        Command::Install { dir } => run_install(dir, false).await,
+        Command::Update { dir } => run_install(dir, true).await,
     }
 }
 
@@ -476,51 +482,187 @@ fn power_call(vmid: u32, action: &str, confirm: bool) -> VerbCall {
     )
 }
 
-fn run_register(install_dir: Option<PathBuf>, force: bool) -> Result<()> {
+fn path_contains(dir: &std::path::Path) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|p| p == dir))
+        .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// install / update — deploy into the user application directory
+// ---------------------------------------------------------------------------
+
+/// Install root (Windows): `%LOCALAPPDATA%/pve-mcp`.
+#[cfg(windows)]
+fn install_dir_default() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(|d| PathBuf::from(d).join("pve-mcp"))
+        .unwrap_or_else(|| pve_core::config::app_data_dir().unwrap_or_else(|| PathBuf::from(".")))
+}
+
+/// Copy both binaries into the install dir. Daemon-safety: the running
+/// daemon is the same exe — stop it first, copy, restart it (config and
+/// port dir are untouched, so the restart is invisible to connected
+/// stdio bridges beyond a one-off reconnect).
+async fn run_install(dir_override: Option<PathBuf>, force: bool) -> Result<()> {
+    let verb = if force { "update" } else { "install" };
     let exe = std::env::current_exe().context("resolving current exe")?;
-    let exe_dir = exe.parent().context("exe has no parent")?.to_path_buf();
-    let dir = install_dir.unwrap_or_else(|| exe_dir.clone());
+    let dir = dir_override.unwrap_or_else(install_dir_default);
     std::fs::create_dir_all(&dir).context("creating install dir")?;
+
+    let mcp_name = if cfg!(windows) {
+        "pve-mcp.exe"
+    } else {
+        "pve-mcp"
+    };
     let cli_name = if cfg!(windows) {
         "pve-cli.exe"
     } else {
         "pve-cli"
     };
-    let dest = dir.join(cli_name);
-    if dir != exe_dir && dest.exists() && !force {
-        bail!(
-            "{} already exists — pass --force to overwrite (or re-register after upgrading pve-mcp)",
-            dest.display()
-        );
+    let mcp_dest = dir.join(mcp_name);
+    let cli_dest = dir.join(cli_name);
+
+    // 1. Daemon-safety: a running daemon locks the exe (Windows) and would
+    //    keep serving stale code after a copy. Stop it if it is ours.
+    let was_running = daemon::is_daemon_listening();
+    if was_running {
+        println!("[{verb}] stopping running daemon for a clean copy...");
+        let _ = run_stop().await;
     }
-    std::fs::copy(&exe, &dest)
-        .with_context(|| format!("copying {} -> {}", exe.display(), dest.display()))?;
-    println!("registered: {}", dest.display());
+
+    // 2. Copy both binaries (overwrite always: install into a fresh dir or
+    //    update over an existing one — the verb already says intent).
+    for (src, dest, label) in [
+        (&exe, &mcp_dest, "pve-mcp (MCP stdio server)"),
+        (&exe, &cli_dest, "pve-cli (verb CLI)"),
+    ] {
+        std::fs::copy(src, dest)
+            .with_context(|| format!("copying {} -> {}", src.display(), dest.display()))?;
+        println!("[{verb}] {label}: {}", dest.display());
+    }
+
+    // 3. PATH: add to the user PATH when missing (persisted, no admin).
     if !path_contains(&dir) {
+        add_to_user_path(&dir)?;
         println!(
-            "note: {} is not on PATH — add it to use `pve-cli` from anywhere",
+            "[{verb}] added {} to the user PATH (new shells pick it up)",
             dir.display()
         );
+    } else {
+        println!("[{verb}] {} already on PATH", dir.display());
     }
-    let status = std::process::Command::new(&dest)
-        .arg("--help")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    match status {
-        Ok(s) if s.success() => println!("self-check ok: pve-cli --help"),
-        other => {
-            let _ = std::fs::remove_file(&dest);
-            bail!("pve-cli copy failed self-check: {other:?} — removed");
+
+    // 4. Self-check both copies, then bring the daemon back if it was up.
+    for (dest, label) in [(&mcp_dest, "pve-mcp"), (&cli_dest, "pve-cli")] {
+        let status = std::process::Command::new(dest)
+            .arg("--help")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        match status {
+            Ok(s) if s.success() => println!("[{verb}] self-check ok: {label}"),
+            other => {
+                let _ = std::fs::remove_file(dest);
+                bail!("{label} copy failed self-check: {other:?} — removed");
+            }
         }
     }
-    println!("try: pve-cli cluster-status");
-    println!("     pve-cli vm-list --ty lxc");
+    if was_running {
+        println!("[{verb}] restarting daemon...");
+        daemon::ensure_daemon(None)?;
+        println!("[{verb}] daemon restarted on the new build");
+    }
+    println!("[{verb}] done — version {}", env!("CARGO_PKG_VERSION"));
     Ok(())
 }
 
-fn path_contains(dir: &std::path::Path) -> bool {
-    std::env::var_os("PATH")
+/// Append one directory to the USER path in the registry (HKCU
+/// Environment\Path) and broadcast WM_SETTINGCHANGE so new shells see it
+/// without a re-login. Existing entries are never touched.
+#[cfg(windows)]
+fn add_to_user_path(dir: &std::path::Path) -> Result<()> {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_EXPAND_SZ};
+    use winreg::{RegKey, RegValue};
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let env = hkcu.open_subkey_with_flags("Environment", KEY_READ | KEY_SET_VALUE)?;
+    // Only ERROR_FILE_NOT_FOUND means "no PATH yet"; any other failure
+    // (corrupt data, wrong type) must propagate — writing back a
+    // default-empty value would WIPE the user's PATH (vite-plus review).
+    let existing: String = match env.get_value("Path") {
+        Ok(val) => val,
+        Err(e) if e.raw_os_error() == Some(2) => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let dir_norm = dir.to_string_lossy().trim_end_matches('\\').to_string();
+    let already = existing
+        .split(';')
+        .any(|entry| entry.trim_end_matches('\\').eq_ignore_ascii_case(&dir_norm));
+    if already {
+        return Ok(());
+    }
+    let next = if existing.is_empty() {
+        dir_norm.clone()
+    } else {
+        format!("{dir_norm};{existing}")
+    };
+    // REG_EXPAND_SZ keeps %VARIABLE% entries expandable (vite-plus form).
+    env.set_raw_value(
+        "Path",
+        &RegValue {
+            vtype: REG_EXPAND_SZ,
+            bytes: next
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .flat_map(|c| c.to_le_bytes())
+                .collect(),
+        },
+    )?;
+    // Broadcast so Explorer/new terminals notice without re-login.
+    const HWND_BROADCAST: usize = 0xFFFF;
+    const WM_SETTINGCHANGE: u32 = 0x001A;
+    const SMTO_ABORTIFHUNG: u32 = 0x0002;
+    #[allow(unsafe_code)]
+    // SAFETY: SendMessageTimeoutW with a registered-string lParam; read-only
+    // broadcast, no handle ownership involved.
+    unsafe {
+        let mut result: usize = 0;
+        windows_sys::Win32::UI::WindowsAndMessaging::SendMessageTimeoutW(
+            HWND_BROADCAST as _,
+            WM_SETTINGCHANGE,
+            0,
+            c"Environment".as_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            2000,
+            &mut result,
+        );
+    }
+    Ok(())
+}
+
+/// Unix install root: `~/.local/bin` is the de-facto user bin dir
+/// (XDG; already on PATH for most distros).
+#[cfg(not(windows))]
+fn install_dir_default() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".local/bin"))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Unix PATH helper: `~/.local/bin` is conventionally already on PATH;
+/// otherwise print the export line (shell-specific persistence is the
+/// user's domain — we never edit rc files).
+#[cfg(not(windows))]
+fn add_to_user_path(dir: &std::path::Path) -> Result<()> {
+    let on_path = std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|p| p == dir))
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if on_path {
+        return Ok(());
+    }
+    println!(
+        "note: add this to your shell profile: export PATH=\"{}:$PATH\"",
+        dir.display()
+    );
+    Ok(())
 }
