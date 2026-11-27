@@ -63,7 +63,7 @@ description: 验证流程：跑检查门（just ci：fmt → clippy -D warnings 
 | `name_taken` | 旧 vulnforge peer（peer-mac/peer-linux）占名 | 换新名（pve-peer-mac 等）；勿 kill 用户旧会话 |
 | 信任/imports 对话框挡住 | 新 clone 仓首次进入 | `hc keys <addr> down enter` 两步：信任目录 → 允许外部导入 |
 | `NEXEST=missing` | peer 未装 cargo-nextest | 派发任务里带 `cargo install cargo-nextest --locked` 前置步 |
-| 假绿（GATE_EXIT=0 但报错） | `just ci ... ; echo` 分号吞退出码 | 派发语句用 `&&` 链或让 peer 自己报每阶段退出码 |
+| 假绿（GATE_EXIT=0 但报错） | `just ci ... ; echo` 分号吞退出码；just 配方内管道 `cmd | tail; echo EXIT=$?` 拿的是 tail 的退出码 | 派发语句用 `&&` 链；让 peer 报每阶段退出码而非只报最后 echo |
 
 **peer 轮失败分类（三类处置不同，混同会误修）**：
 - **平台真实差异**（unix 分支编译错/行为差）→ 本机修代码，`cfg(unix)` 分支同样要过 clippy——考虑本地 `cargo check --target` 交叉检查可行性
