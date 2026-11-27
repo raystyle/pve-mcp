@@ -39,7 +39,10 @@ fn smoke_login_and_read_version() {
         .expect("GET /version succeeds")
         .expect("version data present");
     let release = version["version"].as_str().unwrap_or_default();
-    assert!(!release.is_empty(), "version payload has release: {version}");
+    assert!(
+        !release.is_empty(),
+        "version payload has release: {version}"
+    );
     eprintln!("connected: PVE {release}");
 }
 

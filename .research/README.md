@@ -13,6 +13,14 @@
     └── result.md           # 结论：跑了什么、退出码、测试数、审查结论、回路记录
 ```
 
+## feature 索引
+
+| feature | 内容 | 关联 ADR |
+| --- | --- | --- |
+| [dev-system](dev-system/) | Rust Claude 开发体系先例（tapo/keeler/#34132）、rust 模式、PVE 客户端生态 | ADR-002 |
+| [feature-scan](feature-scan/) | 集群清点、PVE MCP 先例工具矩阵、工具表 | ADR-001 |
+| [pve-core](pve-core/) | 域类型 + 配置 + API 客户端首增量验证 | ADR-001 |
+
 ## 与 plan / ADR 的分工对齐
 
 | 文档         | 回答的问题                                       | 归属   |

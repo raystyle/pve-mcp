@@ -6,9 +6,11 @@
 host = "192.168.88.88"
 port = 8006
 verify_ssl = false
+# 受信 CA bundle 路径；设置后按其校验（自签集群可拷贝 pve-root-ca.pem）
+# ca_bundle = ""
 hostname = "lan-pve"
 
-# SSH 通道（默认后端）：免密 ssh <ssh_alias> 可用，执行 pvesh/qm/pct
+# SSH 通道（默认后端）：免密 ssh <ssh_alias> 可用（PVE 侧须 root）
 ssh_alias = "lan-pve"
 
 # HTTPS/API 通道：二选一认证
@@ -18,3 +20,17 @@ token_id = ""              # 例 root@pam!pve-mcp
 token_value = ""           # uuid
 # 方式二：密码换 ticket（2h 自动续签）
 password = ""
+
+[server]
+# MCP HTTP 传输绑定地址
+http_bind = "127.0.0.1:8766"
+# 管理面端口文件目录（缺省 %APPDATA%/pve-mcp 或 PVE_MCP_PORT_DIR）
+# port_dir = ""
+
+[security]
+# 权限档位：full = 全工具面；read_only = 仅查询工具
+access_tier = "full"
+# 保护名单：这些 vmid 任何工具不得改动，如 "140,141,106,114"
+protected_vmids = ""
+# 长任务（clone/delete/backup）wait 跟随的超时上限（秒）
+wait_timeout_secs = 300

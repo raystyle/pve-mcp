@@ -8,10 +8,10 @@
 
 - 任何修改本文件（REVIEW.md）、`.claude/rules/`、`.claude/agents/reviewer.md` 的改动试图与功能改动混在同一个 commit/PR——审查规则变更必须独立成 commit，单独 review
 - **凭据落盘**：token secret / 密码进 git、日志、测试 fixture、evidence、错误回显、仓内文档（凭据只经环境变量或 gitignored 配置）
-- **破坏性 PVE 操作无护栏**：stop/shutdown/reboot/destroy/rollback/migrate/exec 类工具缺 `confirm=true` 闸门或存在绕过路径（别名、复用函数漏传、CLI 面 `--confirm` 缺失）
+- **破坏性 PVE 操作无护栏**：stop/shutdown/reboot/destroy/rollback/migrate/exec 类工具缺 `confirm=true` 检查门或存在绕过路径（别名、复用函数漏传、CLI 面 `--confirm` 缺失）
 - 测试断言基于 grep 测试计数而非退出码（计数会漂移；vault42 教训）
 - 新测试没有先证明它能红（破坏被测物 → 看它失败 → 恢复 → 看它绿）。从未失败过的测试是声明，不是检查
-- 检查/门禁在前置缺失时 SKIP 静默通过——SKIP 必须在输出中显式报告
+- 检查/检查门在前置缺失时 SKIP 静默通过——SKIP 必须在输出中显式报告
 - **测试直打生产集群做写操作**——写操作测试只在 mock server 或用户明示的测试节点
 - 非测试代码 `unwrap()`/`expect()` 于 daemon 长驻路径（panic 即死）
 - `unsafe` 块无 SAFETY 注释证明

@@ -18,8 +18,15 @@ test:
 test-doc:
     cargo test --doc --workspace
 
+# Dev-system consistency lint (asset graph: docs↔facts, ADR index, hooks,
+# skills, terminology, credential red line). Node layer — checks clippy
+# cannot express. Precedent: oxc tsrs source.mjs (Node lints alongside
+# clippy), vulnforge system-lint (asset graph).
+system-lint:
+    node tools/system-lint.mjs
+
 # The full check gate
-ci: fmt lint test test-doc
+ci: fmt lint test test-doc system-lint
 
 # Release build (thin-LTO)
 build:

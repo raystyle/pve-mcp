@@ -61,7 +61,7 @@ paths:
 - **线性管道不套状态机**：工具调用流水线（validate → confirm 检查 → execute → audit → respond）是固定顺序的中间件链，不是状态转移——套 FSM 是过度设计
 - 复杂层级状态图（需要嵌套/并行/守卫可视化）才引入 statig 类运行时库——本项目状态域均为简单线性图，预期用不到
 
-## 构建与门禁
+## 构建与检查门
 
 - 常用命令：`cargo build` / `cargo test -p <crate>` / `cargo clippy --workspace --all-targets -- -D warnings`
 - nextest 前置：`cargo install cargo-nextest`；just 前置：`cargo install just`
@@ -109,6 +109,6 @@ paths:
 ### 安全红线
 
 - **凭据红线**：token secret / 用户密码只经环境变量或 gitignored `pve-mcp.toml`；绝不进日志（tracing）、测试 fixture、evidence、仓内文档；`pve-mcp.toml.example` 用占位符
-- 工具面破坏性操作（stop/shutdown/reboot/destroy/rollback/migrate/exec）必须 `confirm=true` 参数闸门；CLI 动词必须 `--confirm`；dry-run 默认（先例 pve-harness `create`/`delete` 的 dry-run until --yes 形态）
+- 工具面破坏性操作（stop/shutdown/reboot/destroy/rollback/migrate/exec）必须 `confirm=true` 参数检查门；CLI 动词必须 `--confirm`；dry-run 默认（先例 pve-harness `create`/`delete` 的 dry-run until --yes 形态）
 - MCP 工具返回文本不内嵌 secret；错误信息脱敏（报 401 时不回显凭据）
 - 电源动作幂等：先查现态，已达目标态不写（pve-harness power IDEMPOTENT_TARGET 表）

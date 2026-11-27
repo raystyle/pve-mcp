@@ -42,7 +42,7 @@ just ci    # = lint + test 聚合
 
 > yurukusa 评论：CLAUDE.md rules: advisory … Hooks (exit code 2): **enforced** — the tool physically cannot execute. For any rule that matters, convert it from a rule to a hook.
 
-官方确认 rules/CLAUDE.md 无强制机制。**判据固化**：要紧规则（危险命令、凭据）必须 hook；rules 只省上下文不作闸门。
+官方确认 rules/CLAUDE.md 无强制机制。**判据固化**：要紧规则（危险命令、凭据）必须 hook；rules 只省上下文不作检查门。
 
 ### 5. review 必须留 record（keeler 原文教训）
 

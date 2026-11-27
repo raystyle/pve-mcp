@@ -38,6 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 当前状态
 
-- 开发体系闭环已落地（四资产 + hooks 闸门 + ADR + 审查体系）；代码未动工
-- 架构基线：know-mcp 形态（workspace 两 crate + rmcp + daemon + 三消费形态）；功能面清点 pve-harness rust 分支待完成（见 `.research/`）
-- git 仓库未初始化（reviewer 走工作区降级路径；init 后规则正本切 main 读取）
+- 开发体系闭环已落地（四资产 + hooks 检查门 + ADR + 审查体系 + system-lint 全局一致性核查）；检查门 `just ci` = fmt → clippy → nextest + doc tests + system-lint
+- 代码进度：pve-core 域类型 + 配置 + API 客户端已交付并真实集群冒烟通过（PVE 9.2.21）；pve-server daemon 骨架（typestate 生命周期）进行中
+- 连接配置 `pve-mcp.toml`（gitignored，模板 `pve-mcp.toml.example`）：单节点 lan-pve（192.168.88.88:8006）
+- git main 已建立；远程 github.com/raystyle/pve-mcp 已配，未推送

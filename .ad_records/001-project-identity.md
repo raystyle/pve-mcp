@@ -14,7 +14,7 @@
 2. **功能面 = 单节点 PVE 全能力**（先例研究收口：ry-ops 346 / NANDI 147 / gilby 40 / chajus1 70+ 的单节点子集，聚合动作不学工具数失控）
 3. **认证双通道**：SSH mesh key（root@lan-pve，herdr 同款）+ API token（复用 pvebot-ro/pvebot-power 分权）+ 密码 ticket 备用（已存 pve-mcp.toml，gitignored）
 4. **护栏体系**（四先例共同模式全采纳）：confirm=true 结构化错误、MCP annotations、`anthropic/requiresUserInteraction` 人审、protected_vmids、access_tier 分权、审计日志、wait_for_task 语义、dry-run 默认
-5. **破坏性操作不裸奔**：任何写面工具必须有 confirm 闸门与审计记录
+5. **破坏性操作不裸奔**：任何写面工具必须有 confirm 检查门与审计记录
 
 ### 工具表（v1 终版草案，17 工具）
 
@@ -35,7 +35,7 @@
 
 | 工具 | 护栏 |
 | --- | --- |
-| `vm_power`（start/shutdown/stop/reboot/reset/suspend/resume） | stop/reset 应急闸门；wait 默认 |
+| `vm_power`（start/shutdown/stop/reboot/reset/suspend/resume） | stop/reset 应急检查门；wait 默认 |
 | `vm_create` | 模板克隆 + cloud-init 全参；dry-run 默认 → confirm 执行 |
 | `vm_delete` | 仅停机可删 + 清盘；dry-run 默认；protected_vmids 拒绝 |
 | `vm_config`（resize_disk/set_cloudinit/update） | confirm |
@@ -55,7 +55,7 @@
 | 2 工具表 | ✅ 终版草案（本 ADR） | 用户终审 |
 | 3 认证双通道 | ✅ 环境已实测（mesh key root/ray 免密；pvebot token ACL 在位） | token secret 接入 |
 | 4 护栏体系 | ✅ 设计定稿（先例驱动） | 实现随工具面 |
-| 5 破坏性操作闸门 | 设计含于 4 | 实现验证 |
+| 5 破坏性操作检查门 | 设计含于 4 | 实现验证 |
 
 ## 最终产物
 

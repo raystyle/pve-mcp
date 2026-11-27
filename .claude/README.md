@@ -16,7 +16,7 @@
 | 资产                | 职责                                                            | 写入者 | 本仓内容                                              |
 | ------------------- | ---------------------------------------------------------------- | ------ | ----------------------------------------------------- |
 | **`settings.json`** | 权限 allowlist + hooks 配置 + plansDirectory                    | 人     | cargo/just/git 常规操作 allowlist + 三 hooks          |
-| **`hooks/**`**      | **确定性强制**：必须拦的动作，CLAUDE.md 只是约定、hook 才是闸门 | 人     | guard-dangerous.mjs / verify-evidence.mjs / archive-session.mjs + with-node.sh |
+| **`hooks/**`**      | **确定性强制**：必须拦的动作，CLAUDE.md 只是约定、hook 才是检查门 | 人     | guard-dangerous.mjs / verify-evidence.mjs / archive-session.mjs + with-node.sh |
 | **`agents/reviewer.md`** | 独立审查代理定义（新上下文、代码+安全一体）                 | 人     | 审查流程 + PVE 证据分级                               |
 
 ## 会话反哺闭环

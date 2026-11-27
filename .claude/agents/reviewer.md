@@ -41,7 +41,7 @@ tools:
 ## 安全面清单（PVE 特化）
 
 - **凭据流向**：token secret / 密码是否进日志（tracing）、测试 fixture、evidence、错误信息回显、仓内文档？凭据只应经环境变量或 gitignored 配置
-- **护栏覆盖**：破坏性操作（stop/shutdown/reboot/destroy/rollback/migrate/exec）是否全部有 `confirm=true` 闸门？CLI 面 `--confirm`？dry-run 默认？有无绕过路径（别名/复用函数漏传）
+- **护栏覆盖**：破坏性操作（stop/shutdown/reboot/destroy/rollback/migrate/exec）是否全部有 `confirm=true` 检查门？CLI 面 `--confirm`？dry-run 默认？有无绕过路径（别名/复用函数漏传）
 - **注入**：MCP 工具参数（vmid、node 名、路径）拼进 URL/命令时是否转义？PVE API 路径拼接的合法性校验
 - **管理面暴露**：daemon admin plane 只绑 127.0.0.1？端口文件不泄到共享目录？
 - **ticket 认证**：密码是否只在登录请求中出现？续签失败路径不 panic？

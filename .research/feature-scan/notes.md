@@ -35,11 +35,11 @@
 | `task_status` | task | UPID 状态 + 日志尾 |
 | `storage_list` | （inventory 内含） | 存储面清单 |
 
-### 收录：受控操作（confirm 闸门 + dry-run 默认）
+### 收录：受控操作（confirm 检查门 + dry-run 默认）
 
 | MCP 工具 | 对应 harness 命令 | 护栏 |
 | --- | --- | --- |
-| `vm_power`（action: start/shutdown/stop/reboot/reset） | power + start/stop/shutdown/reboot/reset 别名 | stop/reset 硬切电 = 应急闸门（PVE_ALLOW_STOP 形态）；shutdown ACPI 优先 |
+| `vm_power`（action: start/shutdown/stop/reboot/reset） | power + start/stop/shutdown/reboot/reset 别名 | stop/reset 硬切电 = 应急检查门（PVE_ALLOW_STOP 形态）；shutdown ACPI 优先 |
 | `vm_create` | create | 克隆模板；dry-run 默认，`confirm=true` 执行 |
 | `vm_delete` | delete | 仅停机可删 + 清盘；dry-run 默认 |
 | `snapshot_manage`（action: create/list/rollback/delete） | （harness 无，PVE 原生面） | rollback/delete 需 confirm |
