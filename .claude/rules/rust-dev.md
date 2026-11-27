@@ -61,6 +61,11 @@ paths:
 - **线性管道不套状态机**：工具调用流水线（validate → confirm 检查 → execute → audit → respond）是固定顺序的中间件链，不是状态转移——套 FSM 是过度设计
 - 复杂层级状态图（需要嵌套/并行/守卫可视化）才引入 statig 类运行时库——本项目状态域均为简单线性图，预期用不到
 
+## 源码修改纪律
+
+- **改 Rust 源码禁 shell 内嵌补丁**：bash heredoc/python -c 里的 Rust 代码会遭遇引号/转义/编码三层地狱（本仓实测 4+ 次 `unexpected EOF` 与转义事故）。一律用 Edit/Write 工具；超过单次编辑的批量改动写 codemod 脚本落盘（tools/.codemod-*.mjs）执行后即删
+- **Windows 窗口类验证必须枚举宿主**：控制台程序的窗口可能属于 WindowsTerminal/conhost 宿主进程——查目标进程 `MainWindowHandle=0` 是假阴性（黑窗 bug 复盘）。正确做法：按 `MainWindowTitle` 过滤全进程表并匹配目标二进制名
+
 ## 构建与检查门
 
 - 常用命令：`cargo build` / `cargo test -p <crate>` / `cargo clippy --workspace --all-targets -- -D warnings`
