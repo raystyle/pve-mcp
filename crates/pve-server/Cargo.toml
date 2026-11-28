@@ -34,6 +34,13 @@ test-support = { path = "../test-support" }
 tempfile = "3"
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+axum = "0.8"
+tokio = { workspace = true }
+rcgen = "0.13"
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
 
 [lints]
 workspace = true

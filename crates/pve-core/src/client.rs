@@ -150,6 +150,11 @@ impl fmt::Debug for PveClient {
 
 impl PveClient {
     pub fn new(config: &PveConfig) -> Result<Self, ApiError> {
+        // rustls 0.23 needs exactly one CryptoProvider selected when the
+        // linking test/binary pulls in more than one feature set; the
+        // workspace pins ring. Installing is idempotent (Ok(false) when a
+        // provider already exists).
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let trimmed = config.host.trim();
         let host = match trimmed.parse::<std::net::IpAddr>() {
             Ok(std::net::IpAddr::V6(v6)) => format!("[{v6}]"),
