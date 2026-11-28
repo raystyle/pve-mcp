@@ -28,6 +28,16 @@
 
 **三台全绿收口。**
 
+## 覆盖度轮（2026-11-28，df541dd→89c5eb6 链）
+
+| 台 | 门 | 测试 |
+| --- | --- | --- |
+| Windows | 全绿 | 67/67 |
+| lan-mac | 全绿 | 67/67（+18 = dispatch_mock 8 + tool_surface 10） |
+| lan-ubuntu | 全绿 | 67/67 |
+
+三轮 peer 全绿。install/update（ETXTBSY 原子替换）、mock-PVE 集成套件、rustls provider 修复全部跨平台验证。
+
 ## 结论
 
 1. **三平台轮是唯一能暴露 unix-only 缺陷的层**：三个真 bug（E0382 根因、unsafe allow、CRLF）没有一个在 Windows 本地可见——cfg(windows)/cfg(unix) 分支互为盲区
