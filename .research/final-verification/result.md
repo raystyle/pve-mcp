@@ -56,3 +56,4 @@
 - `.github/workflows/ci.yml`：push/PR 触发，三平台门（windows-latest / ubuntu-latest / macos-14，用户裁定不含 macOS x64）= fmt → clippy -D warnings → nextest → doc tests，独立 system-lint job（node 22）
 - `.github/workflows/release.yml`：tag v* 触发，三 target release 构建，产物 = pve-mcp + pve-cli + pve-mcp.toml.example + README 打 tar.gz + sha256，上传 GitHub Release（生成 notes）
 - 首个封版：v0.1.0（67 测试 × 3 平台全绿后打 tag）
+- **v0.1.0 发布实绩**：CI 门 + release 双 workflow 全绿（3m48s）；Release 产物 6 件 = 三平台 tar.gz + sha256（win 3.4MB / linux 3.8MB / mac 3.5MB）；修复一坑——`macos-14` runner 标签在此计划不可用（"macos-14-arm64-us-default not supported"），改 `macos-latest` 后 tag 重打（删旧 tag → 移到 fix commit → 重推）
