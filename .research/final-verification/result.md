@@ -50,3 +50,9 @@
 ## 结论
 
 **目标达成**：17/17 工具全部交付并在真实集群验收（写路径全部经 confirm 授权或 dry-run）；三平台（Windows/lan-mac/lan-ubuntu）49 测试 × 3 全绿；安全审查 blocking 项修复并实机复验。远程 main = 9f4432c。
+
+## CI/CD 里程碑（2026-11-28，99ba339 + v0.1.0）
+
+- `.github/workflows/ci.yml`：push/PR 触发，三平台门（windows-latest / ubuntu-latest / macos-14，用户裁定不含 macOS x64）= fmt → clippy -D warnings → nextest → doc tests，独立 system-lint job（node 22）
+- `.github/workflows/release.yml`：tag v* 触发，三 target release 构建，产物 = pve-mcp + pve-cli + pve-mcp.toml.example + README 打 tar.gz + sha256，上传 GitHub Release（生成 notes）
+- 首个封版：v0.1.0（67 测试 × 3 平台全绿后打 tag）
