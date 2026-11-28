@@ -590,8 +590,14 @@ mod tests {
             path: "/nodes".to_string(),
         };
         let msg = e.to_string();
-        assert!(msg.contains("PVEAuditor"), "403 message must name the role: {msg}");
-        assert!(msg.contains("token"), "403 message must say it is the token: {msg}");
+        assert!(
+            msg.contains("PVEAuditor"),
+            "403 message must name the role: {msg}"
+        );
+        assert!(
+            msg.contains("token"),
+            "403 message must say it is the token: {msg}"
+        );
     }
 
     #[test]

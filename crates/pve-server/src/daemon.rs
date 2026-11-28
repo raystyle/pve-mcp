@@ -1557,3 +1557,35 @@ pub fn run_daemon(config_path: Option<PathBuf>, force_port_dir: Option<PathBuf>)
     tracing::info!(dir = %dir.display().to_string(), "daemon ready");
     ready.serve(listener, client)
 }
+
+#[cfg(test)]
+mod dispatch_pure_tests {
+    use super::*;
+
+    #[test]
+    fn downsample_preserves_shape_and_cap() {
+        // ≤ cap: passthrough
+        let rows = vec![json!({"cpu": 0.1}), json!({"cpu": 0.2})];
+        let out = downsample(&rows, 60);
+        assert_eq!(out.len(), 2);
+        // > cap: evenly spread, endpoints included, exactly cap long
+        let big: Vec<Value> = (0..300).map(|i| json!({"i": i})).collect();
+        let out = downsample(&big, 60);
+        assert_eq!(out.len(), 60);
+        assert_eq!(out[0]["i"], 0);
+        assert_eq!(out[59]["i"], 295); // floor(59 * 300/60) = 295
+                                       // monotonic non-decreasing sample indices
+        let get = |v: &Value| v["i"].as_u64().unwrap();
+        for w in out.windows(2) {
+            assert!(get(&w[1]) >= get(&w[0]));
+        }
+    }
+
+    #[test]
+    fn downsample_exact_cap_is_passthrough() {
+        let big: Vec<Value> = (0..60).map(|i| json!({"i": i})).collect();
+        let out = downsample(&big, 60);
+        assert_eq!(out.len(), 60);
+        assert_eq!(out[59]["i"], 59);
+    }
+}
