@@ -43,3 +43,11 @@
 - pvebot-ro@pve!mcp token 接入（ADR-001 裁定 #7）：本地配置切 token 主通道，密码降为注释备用；read 面全绿（cluster/list/status 106）
 - 先例对照（agent-cloud / pve-events / flutter_server_box）：403 消息必须点名角色与修复路径——client.rs 401/403 消息改为 actionable（Forbidden 报文含 PVEAuditor + Propagate 提示）；新测试 forbidden_message_names_the_fix 先红后绿
 - flutter_server_box 补充常量：TICKET_LIFETIME 2h、RENEW_AFTER 1h、LIFETIME_MARGIN 5min（时钟漂移+在途请求）——我们 10min margin 已覆盖同语义
+
+## 覆盖度轮（2026-11-28，50→67 测试）
+
+- 盘点发现 dispatch 层（16 个 admin arms）零直接测试；两级补齐：
+  1. 纯函数套件（tool_surface_test.rs，9 项）：PowerAction confirm 分层/幂等 target/FromStr、SnapshotName 注入墙、Upid hex-pid 回归+node 提取、VmidSet 两种 live 形态
+  2. mock-PVE 集成套件（dispatch_mock_test.rs，8 项）：axum+rustls TLS mock（自签 rcgen 证书），真 daemon 指 mock，覆盖 cluster_status/vm_list/vm_status/vm_metrics/vm_agent/snapshot list/protected 拒绝/read_only tier
+- **产品 bug 由测试套件反抓**：rustls CryptoProvider 不确定性（多 feature 集链接时进程级无 provider）会无声杀死 daemon（空 stderr, exit 101）——PveClient::new 安装 ring provider（幂等）
+- 先例借鉴：pnpm executable_link.rs（staging 唯一名+失败自清+rename 重试）、vite-plus windows_path.rs（PATH 注册表安全写：只认 ERROR_FILE_NOT_FOUND、REG_EXPAND_SZ）
