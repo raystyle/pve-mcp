@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: release-${{ matrix.target }}-cargo-
+
+      - name: Build (release, thin-LTO)
+        run: cargo build --release --workspace --target ${{ matrix.target }}
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGE="pve-mcp-${VERSION}-${{ matrix.target }}"
+          mkdir -p "dist/${STAGE}"
+          for bin in pve-mcp pve-cli; do
+            SRC="target/${{ matrix.target }}/release/${bin}"
+            [ -f "${SRC}.exe" ] && SRC="${SRC}.exe"
+            [ -f "$SRC" ] && cp "$SRC" "dist/${STAGE}/"
+            [ -f "${bin}.toml.example" ] && cp pve-mcp.toml.example "dist/${STAGE}/"
+          done
+          cp README.md dist/${STAGE}/
+          (cd dist && tar czf "${STAGE}.tar.gz" "${STAGE}")
+          sha256sum "dist/${STAGE}.tar.gz" > "dist/${STAGE}.tar.gz.sha256"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: true

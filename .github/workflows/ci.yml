@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gate:
+    name: check gate (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            cargo-target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            cargo-target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            cargo-target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-cargo-
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (warnings denied)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests (nextest)
+        run: cargo nextest run --workspace
+
+      - name: Doc tests
+        run: cargo test --doc --workspace
+
+  system-lint:
+    name: system-lint (asset graph)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Asset-graph consistency
+        run: node tools/system-lint.mjs
