@@ -9,6 +9,7 @@
 
 mod client_bridge;
 mod daemon;
+mod http;
 mod mcp;
 
 use std::path::PathBuf;
@@ -232,7 +233,10 @@ async fn main() -> Result<()> {
         Command::Status => run_status(cli.config).await,
         Command::Stop => run_stop().await,
         Command::Mcp => mcp::serve_stdio(cli.config).await,
-        Command::Http => bail!("MCP HTTP surface lands with the tool table"),
+        Command::Http => {
+            daemon::ensure_daemon(cli.config.as_deref())?;
+            http::serve(cli.config).await
+        }
         Command::Install { dir } => run_install(dir, false).await,
         Command::Update { dir } => run_install(dir, true).await,
     }

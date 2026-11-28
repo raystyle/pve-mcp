@@ -598,7 +598,9 @@ impl ServerHandler for PveMcpServer {
     }
 }
 
-/// Serve MCP over stdio (called from `pve-mcp stdio`).
+/// Serve MCP over stdio (called from `pve-mcp stdio`). know-mcp form:
+/// ensure the daemon is up BEFORE the MCP handshake — the first tool
+/// call must never pay the cold start inside initialize.
 pub async fn serve_stdio(config_path: Option<std::path::PathBuf>) -> anyhow::Result<()> {
     // Logs to stderr only; stdout carries MCP.
     tracing_subscriber::fmt()
@@ -609,6 +611,7 @@ pub async fn serve_stdio(config_path: Option<std::path::PathBuf>) -> anyhow::Res
         .with_ansi(false)
         .init();
 
+    crate::daemon::ensure_daemon(config_path.as_deref())?;
     let server = PveMcpServer::with_config_path(config_path);
     let service = serve_server(server, (tokio::io::stdin(), tokio::io::stdout())).await?;
     service.waiting().await?;

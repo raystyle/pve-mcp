@@ -110,6 +110,7 @@ paths:
 | dir 存储 iso 真实落点 `<path>/template/iso/` | volid 引用形 `isos:iso/<名>.iso`（M040） |
 | vmbr1 vlan-aware：无 tag 流量直出真网 | vm_create 校验 vmbr1 必须 tag（M045） |
 | pvesh CLI 与 API 面返回语义不同（已解码/未解码） | QGA/lxc 工具走 API 面，不走 pvesh 转发（M021） |
+| **token ACL 授在 /nodes+/vms 时 /cluster/resources 返回空**（403→读面按 None 处理，清单静默 0 行） | PVEAuditor 授在 / 根；或读面代码对"空列表"与"403 无权"区分上报 |
 | **WMI 嵌入式参数经 untyped `put_property(Variant::Object)` 静默丢弃**（ReturnValue=0 但内容没到 WMI——黑窗 bug 定论） | WMI 调用一律走 typed API：serde 结构体 + `exec_class_method::<T,_>`（herdr-runtime windows.rs 形态）；wmi ≥0.18 |
 
 ### 安全红线

@@ -44,6 +44,13 @@
 - 先例对照（agent-cloud / pve-events / flutter_server_box）：403 消息必须点名角色与修复路径——client.rs 401/403 消息改为 actionable（Forbidden 报文含 PVEAuditor + Propagate 提示）；新测试 forbidden_message_names_the_fix 先红后绿
 - flutter_server_box 补充常量：TICKET_LIFETIME 2h、RENEW_AFTER 1h、LIFETIME_MARGIN 5min（时钟漂移+在途请求）——我们 10min margin 已覆盖同语义
 
+## HTTP MCP + token 轮（2026-11-28）
+
+- HTTP 传输落地（know-mcp http.rs 同构）：StreamableHttpService + LocalSessionManager，/mcp 端点；stdio/http 均 ensure_daemon 先行（冷启动不落 initialize 内）
+- 实测：HTTP 三步握手（initialize→initialized→tools/list 16 工具）+ tools/call cluster_status 返回真数据
+- **token ACL 坑**：PVEAuditor 只授 /nodes+/vms 时 /cluster/resources 403→空列表（vm_list 静默 0 行）；修法 = ACL 授 / 根（pveum acl modify / --tokens ... --roles PVEAuditor）；规则已进 rust-dev.md 战史表
+- know-mcp 结构对齐裁定：ensure_daemon 必须在 MCP initialize 之前（首调用不得在握手内付冷启动）
+
 ## 覆盖度轮（2026-11-28，50→67 测试）
 
 - 盘点发现 dispatch 层（16 个 admin arms）零直接测试；两级补齐：
